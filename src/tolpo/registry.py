@@ -511,8 +511,14 @@ class Registry:
             self._mark(top, online=False, error=type(exc).__name__)
             log.warning("update failed for %s: %s", top.slug, type(exc).__name__)
             return
-        for child in top.device.children or []:
+        children = top.device.children or []
+        for child in children:
             self._upsert(child, top)
+        # A child that was unpaired is no longer in the hub's list. Only a successful update says so.
+        present = {child.device_id for child in children}
+        for did, entry in list(self._entries.items()):
+            if entry.root is top and did not in present:
+                del self._entries[did]
         self._mark(top, online=True)
 
     def _mark(self, top: Entry, *, online: bool, error: str | None = None) -> None:

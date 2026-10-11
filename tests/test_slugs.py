@@ -111,3 +111,53 @@ def test_a_remembered_slug_that_is_in_use_by_another_device_is_not_reused(tmp_pa
     reg._slugs[device_key(fakes.plug("id-b", "x"))] = "bulb"  # damage: the same slug remembered for two devices
     reg._adopt(fakes.plug("id-b", "Bulb"))
     assert {e.device.device_id: e.slug for e in reg.entries()} == {"id-a": "bulb", "id-b": "bulb-2"}
+
+
+# ---- children that leave a hub -----------------------------------------------------------------------------------------
+
+
+import asyncio  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def hub_registry(tmp_path):
+    reg = registry(tmp_path)
+    reg._adopt(fakes.hub())
+    return reg
+
+
+def test_a_child_that_is_unpaired_from_the_hub_leaves_the_registry_and_keeps_its_slug_for_later(tmp_path):
+    reg = hub_registry(tmp_path)
+    top = reg.resolve_one("tapo-h200")
+    assert sorted(e.slug for e in reg.entries() if e.root is top) == ["main-door", "temp-sensor"]
+    door = next(c for c in top.device.children if c.device_id == "child-door")
+    top.device.children.remove(door)
+    asyncio.run(reg._update_locked(top))
+    assert sorted(e.slug for e in reg.entries() if e.root is top) == ["temp-sensor"]
+    top.device.children.append(door)  # paired again
+    asyncio.run(reg._update_locked(top))
+    assert reg.resolve_one("main door").slug == "main-door"  # the same short id as before
+
+
+def test_a_failed_update_never_removes_children(tmp_path):
+    reg = hub_registry(tmp_path)
+    top = reg.resolve_one("tapo-h200")
+
+    async def broken():
+        raise TimeoutError
+
+    top.device.update = broken
+    top.device.children.clear()  # what a half-answered update could look like
+    asyncio.run(reg._update_locked(top))
+    assert sorted(e.slug for e in reg.entries() if e.root is top) == ["main-door", "temp-sensor"]
+    assert not top.online
+
+
+def test_children_of_another_hub_and_standalone_devices_are_untouched(tmp_path):
+    reg = hub_registry(tmp_path)
+    reg._adopt(fakes.plug("id-plug", "Desk Lamp"))
+    top = reg.resolve_one("tapo-h200")
+    top.device.children.clear()
+    asyncio.run(reg._update_locked(top))
+    assert [e.slug for e in reg.entries()] == ["desk-lamp", "tapo-h200"]
