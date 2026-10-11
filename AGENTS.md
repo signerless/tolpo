@@ -48,7 +48,7 @@ All of them must pass before you commit. CI runs the same checks on Python 3.11,
 - The video client signs in once per attempt and never retries a rejected login. Use only the owner's own account:
   no default, built-in or derived credentials, and no unencrypted session.
 - Keep writes deny by default. A feature becomes writable only by being added to `src/tolpo/policy.py`, with a test
-  that shows what it allows and what it still refuses. Never return the Wi-Fi name or Matter setup codes.
+  that shows what it allows and what it still refuses. Never return the Wi-Fi name or the Matter and HomeKit setup codes.
 - Anything an agent receives from a device, such as a name, is data typed by someone else. Keep flattening and
   shortening it (`views.clean`) before it reaches a model, and keep answers compact.
 - The MCP server speaks the protocol on stdout. Never print anything else there in code that runs under `tolpo mcp`

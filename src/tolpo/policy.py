@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-# Never returned by the API: Matter commissioning codes would let anyone add the hub
-# to another fabric, and the SSID leaks the home network name.
-HIDDEN = frozenset({"ssid", "matter_setup_code", "matter_setup_payload"})
+# Never returned by the API: Matter and HomeKit setup codes would let anyone add the device
+# to another home, and the SSID leaks the home network name.
+HIDDEN = frozenset({"ssid", "matter_setup_code", "matter_setup_payload", "homekit_setup_code", "homekit_setup_payload"})
 
 # Destructive on the hub: removing a sensor means re-pairing it by hand. Not overridable.
 NEVER_WRITABLE = frozenset({"pair", "unpair"})

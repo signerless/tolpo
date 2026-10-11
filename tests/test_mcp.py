@@ -96,7 +96,7 @@ async def test_get_device_hides_debug_and_secrets():
         hub = (await client.call_tool("get_device", {"device": "tapo-h200", "include_debug": True})).structured_content
     ids = lambda d: {f["id"] for f in d["features"]}
     assert "reboot" not in ids(plain) and "reboot" in ids(debug)
-    assert "ssid" not in ids(debug) and not {"matter_setup_code", "matter_setup_payload"} & ids(hub)
+    assert "ssid" not in ids(debug) and not {"matter_setup_code", "matter_setup_payload", "homekit_setup_code"} & ids(hub)
     brightness = [f for f in plain["features"] if f["id"] == "brightness"][0]
     assert brightness["writable"] is True and (brightness["min"], brightness["max"]) == (1, 100)
     assert "writable" not in [f for f in debug["features"] if f["id"] == "reboot"][0]
@@ -173,8 +173,9 @@ async def test_no_tool_leaks_secrets():
         for device in ("tapo-h200", "office-1", "main-door", "hallway-cam"):
             seen.append(await client.call_tool("get_device", {"device": device, "include_debug": True}))
         seen.append(await client.call_tool("set_feature", {"device": "tapo-h200", "feature": "matter_setup_code"}))
+        seen.append(await client.call_tool("set_feature", {"device": "tapo-h200", "feature": "homekit_setup_code"}))
     dump = " ".join(text(r) + json.dumps(r.structured_content) for r in seen)
-    for secret in ("SECRET-123", "MT:SECRETPAYLOAD", "MyHomeWifi"):
+    for secret in ("SECRET-123", "MT:SECRETPAYLOAD", "HK-SECRET-456", "MyHomeWifi"):
         assert secret not in dump
 
 

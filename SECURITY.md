@@ -12,7 +12,7 @@ Describe what you found, how to reproduce it and the impact you expect. Reports 
 
 - A way to make the server perform a write the policy forbids, such as `pair`, `unpair`, camera privacy changes
   or a reboot without an explicit opt-in.
-- A way to read data the server promises never to return: the Wi-Fi name and Matter setup codes.
+- A way to read data the server promises never to return: the Wi-Fi name and the Matter and HomeKit setup codes.
 - A way to get a picture from a camera the owner has not enabled in `cameras.snapshots`, or while its privacy mode is on.
 - A way to make the Tapo password, the camera account or an RTSP address appear in a response, an error or a log.
 - A bypass of the bearer token or of the `Host` header check on the HTTP API.

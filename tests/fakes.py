@@ -113,6 +113,7 @@ def hub():
         features=[
             FakeFeature("matter_setup_code", T.Sensor, C.Debug, "SECRET-123"),
             FakeFeature("matter_setup_payload", T.Sensor, C.Debug, "MT:SECRETPAYLOAD"),
+            FakeFeature("homekit_setup_code", T.Sensor, C.Debug, "HK-SECRET-456"),
             FakeFeature("pair", T.Action, C.Config),
             FakeFeature("test_alarm", T.Action, C.Config),
         ],

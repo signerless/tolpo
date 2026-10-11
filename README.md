@@ -32,7 +32,7 @@ It ships two interfaces over the same core:
 - **One view of the whole house.** Lights, plugs, the H100/H200 hub and its sensors, cameras and the
   doorbell, each with live state and a clear list of what can be changed.
 - **Safe by default.** Reads are broad; writes are limited to power, brightness and color unless you
-  opt in. Cameras, pairing and hub alarms stay read-only. Wi-Fi names and Matter setup codes are
+  opt in. Cameras, pairing and hub alarms stay read-only. Wi-Fi names and Matter and HomeKit setup codes are
   never returned. An agent sees a camera only if you name it.
 - **Pictures from cameras.** A camera you enable gives an agent one still picture on request, through the same
   video channel the Tapo app uses. No extra camera account is needed.
@@ -284,7 +284,7 @@ This server controls physical things, so it refuses by default and widens only o
 
 | Scope | Allowed |
 |---|---|
-| Read | Every feature of every device, except the Wi-Fi name and Matter setup codes, which are never returned |
+| Read | Every feature of every device, except the Wi-Fi name and the Matter and HomeKit setup codes, which are never returned |
 | Write by default | Power, brightness, color temperature, color and light presets, on lights and plugs |
 | Write on opt-in | Anything else, named in `policy.allow_write` (alarm test, pan/tilt, detection switches, reboot) |
 | Pictures | Only from the cameras named in `cameras.snapshots`. Off by default |

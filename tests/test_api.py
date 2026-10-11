@@ -29,7 +29,7 @@ def test_filters(client):
 
 def test_secrets_never_leave(client):
     text = client.get("/devices").text + client.get("/devices/tapo-h200").text + client.get("/devices/office-1").text
-    for secret in ("SECRET-123", "MT:SECRETPAYLOAD", "MyHomeWifi", "matter_setup", "ssid"):
+    for secret in ("SECRET-123", "MT:SECRETPAYLOAD", "HK-SECRET-456", "MyHomeWifi", "matter_setup", "homekit_setup", "ssid"):
         assert secret not in text
 
 

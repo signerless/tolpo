@@ -23,7 +23,7 @@ Refer to a device by its short `id` (`office-1`), by its name as shown in the ap
 (case-insensitive), or by a glob (`office*`) in the batch endpoints.
 
 Reads are broad; writes are limited to power, brightness and color unless the owner
-widens `policy.allow_write`. Responses never include Matter setup codes or the Wi-Fi name.
+widens `policy.allow_write`. Responses never include Matter or HomeKit setup codes or the Wi-Fi name.
 A still picture is available only from cameras the owner listed in `cameras.snapshots`.
 """
 
