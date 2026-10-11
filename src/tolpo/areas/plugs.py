@@ -132,6 +132,7 @@ async def identity(registry, caller, device, name=None, icon=None):
     if icon is not None:
         if not isinstance(icon, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", icon):
             raise ValueError("icon must be 1 to 64 letters, digits, underscores or hyphens")
+        # UNVERIFIED: avatar as a set_device_info key comes from the audit beans. The P115 fixture shows it in reads.
         params["avatar"] = icon
     if not params:
         raise ValueError("supply a name or icon")
@@ -144,7 +145,8 @@ async def location(registry, caller, device, latitude, longitude):
     for value, limit, label in ((latitude, 90, "latitude"), (longitude, 180, "longitude")):
         if type(value) not in (int, float) or not math.isfinite(value) or not -limit <= value <= limit:
             raise ValueError(f"{label} must be a finite number from {-limit} to {limit}")
-    # python-kasa uses ten-thousandths of a degree in device info.
+    # UNVERIFIED: python-kasa reads latitude and longitude in ten-thousandths of a degree from device info.
+    # That the write takes the same scale is an inference; no location write was captured.
     params = {"latitude": round(latitude * 10000), "longitude": round(longitude * 10000)}
     out = await write(registry, caller, device, "set_device_info", params)
     out["fields"] = ["location"]
@@ -185,6 +187,8 @@ async def calibration(registry, caller, device, minimum, maximum, curve=None):
 
 async def low_power(registry, caller, device, enabled):
     boolean(enabled)
+    # UNVERIFIED: low_power_mode (0 normal, 1 low power) is an audited device-info read key. Writing it through
+    # set_device_info is an inference that needs a supported switch.
     entry = target(registry, device, HARDWARE_KINDS)
     info = response_object(entry, "get_device_info", await caller.call(entry, "get_device_info"))
     if "low_power_mode" not in info:
@@ -281,6 +285,8 @@ async def energy_history(registry, caller, device, series, start, end, interval,
 
 async def set_price(registry, caller, device, price):
     integer(price, 0, 2147483647, "constant_price")
+    # UNVERIFIED: the price scale (whole currency units, cents or another factor) is a guess. The audit found
+    # integer prices only and the currency is stored elsewhere. The value is passed through unchanged.
     out = await write(registry, caller, device, "set_electricity_price_config", {"type": "constant", "constant_price": price})
     out["constant_price"] = price
     return out
@@ -564,6 +570,8 @@ def tools(ctx):
         """Set a constant price. Replaces time-of-use mode. UNVERIFIED price scaling; do not interpret as a currency amount."""
         return await run(set_price, device, constant_price)
 
+    # UNVERIFIED: clear_energy_data and cancel_auto_off are sent without parameters. The audit names the
+    # methods but not their parameters, and python-kasa has neither.
     @ctx.tool(title="Erase plug energy statistics", tier=Tier.SECURITY)
     async def plug_energy_clear(device: Device,
                                 confirm: Annotated[str | None, Field(description="Exact phrase: clear_energy_data <device id>")] = None) -> dict[str, Any]:
@@ -598,7 +606,7 @@ def tools(ctx):
     async def plug_location_set(device: Device,
                                 latitude: Annotated[float, Field(description="Latitude in degrees, -90 to 90", strict=True)],
                                 longitude: Annotated[float, Field(description="Longitude in degrees, -180 to 180", strict=True)]) -> dict[str, Any]:
-        """Store a location on one plug, switch or socket. Does not return coordinates. Region and clock are left to their own tools."""
+        """Store a location on one plug, switch or socket. Does not return coordinates. UNVERIFIED write scale. Region and clock are left to their own tools."""
         return await run(location, device, latitude, longitude)
 
     @ctx.tool(title="Plug runtime counters")
@@ -637,7 +645,7 @@ def tools(ctx):
     @ctx.tool(title="Switch low-power mode", tier=Tier.SETTING)
     async def switch_low_power_set(device: Device,
                                     enabled: Annotated[bool, Field(description="True for low-power mode, false for normal mode", strict=True)]) -> dict[str, Any]:
-        """Set low-power mode on hardware that reports this setting. Uses low_power_mode 1 or 0."""
+        """Set low-power mode on hardware that reports this setting. UNVERIFIED write of low_power_mode 1 or 0."""
         return await run(low_power, device, enabled)
 
     @ctx.tool(title="Plug LED setting")

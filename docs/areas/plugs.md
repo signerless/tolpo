@@ -16,19 +16,19 @@ Timers, schedules and Away Mode can energize a load while nobody watches.
 - `plug_energy_usage`: Read energy, generation, runtime, cost and savings figures in their native structure.
 - `plug_energy_history`: Read one page of energy or power history. Includes returned range timestamps.
 - `plug_electricity_price`: Read constant or seasonal time-of-use electricity pricing.
-- `plug_electricity_price_set`: Set a constant price in the device's integer scale. Level 2.
+- `plug_electricity_price_set`: Set a constant price in the device's integer scale. Level 2. UNVERIFIED price scale.
 - `plug_energy_clear`: Permanently clear energy statistics. Level 3. Requires `clear_energy_data <device id>`.
 - `plug_auto_off`: Read the auto-off enable flag and delay in minutes.
 - `plug_auto_off_cancel`: Cancel the running timer. Level 3. Requires `cancel_auto_off <device id>`.
 - `plug_protection`: Poll safety state, or read Charge Guard, power protection or maximum power. Level 0.
 - `plug_identity_set`: Rename a device or socket, or change its icon. Level 2.
-- `plug_location_set`: Store latitude and longitude without returning coordinates. Level 2.
+- `plug_location_set`: Store latitude and longitude without returning coordinates. Level 2. UNVERIFIED write scale.
 - `plug_runtime`: Read minutes on today and over the past 7 and 30 days.
 - `switch_settings`: Read state, delay, calibration, button actions, double click, sleep interval or LED settings.
 - `switch_delay_off_set`: Configure delayed shut-off with the candidate v1 shape. Level 2. UNVERIFIED.
 - `switch_double_click_set`: Enable double click and set its recognition interval. Level 2. UNVERIFIED unit and limits.
 - `switch_calibration_set`: Set calibration thresholds and an optional curve id. Level 2. UNVERIFIED units and curve ids.
-- `switch_low_power_set`: Set normal or low-power mode if the device reports the setting. Level 2.
+- `switch_low_power_set`: Set normal or low-power mode if the device reports the setting. Level 2. UNVERIFIED write.
 - `plug_led`: Read LED state and its night-mode window.
 - `plug_led_set`: Set the LED mode or a fixed night window. Level 2. UNVERIFIED fixed-window enum.
 
@@ -50,7 +50,8 @@ are not verified. Reads keep summer and winter prices, periods and weekday/weeke
 Protection polling returns a single current sample. It does not subscribe to push alerts or reset a tripped protection.
 Select `charge_guard`, `power` or `max_power` only when the model supports the corresponding read.
 Cancelling auto-off may leave the load on longer. It needs level 3 and the exact confirmation phrase.
-Names are encoded as python-kasa expects. Icon ids are model-specific. Location uses ten-thousandths of a degree.
+Names are encoded as python-kasa expects. Icon ids are model-specific.
+UNVERIFIED: location is written in ten-thousandths of a degree, the scale python-kasa reads. No write was captured.
 Only latitude and longitude are changed. Clock, region and timezone settings belong to another area.
 
 Switch hardware tools accept wall switches and devices python-kasa classes as dimmers, including dimmer plugs.
@@ -75,6 +76,7 @@ and rule write acceptance need device checks. Check a plug first, then each stri
 UNVERIFIED: legacy `default_states.state.on`, v2 `smart_status` with `re_power_type`, history timestamp boundaries,
 price scale and the cost-array period mapping need real plug checks. Verify each strip child separately.
 Check that clearing energy data removes history and totals only after the exact confirmation phrase is supplied.
+UNVERIFIED: `clear_energy_data` and `cancel_auto_off` are sent without parameters.
 UNVERIFIED: delay-action v1 time units, calibration response and threshold units, curve ids, button action enums,
 sleep interval units, `wiring_status` key, double-click interval units and LED `night_mode_type="time"`.
 Check these on a wall switch and dimmer. Check LED writes on the P115 and low-power writes on a supported switch.

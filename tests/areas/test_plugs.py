@@ -43,9 +43,25 @@ def rule_cases():
 
 
 RULE_CASES = list(rule_cases())
-RULE_RESPONSES = {f"get_{name}_rules": {"rule_list": [{"id": "r1", "delay": 60, "enable": True,
-                  "desired_states": {"device_on": False}, "password": "secret"}], "sum": 1}
-                  for name in plugs.RULE_NAMES.values()}
+# Rule envelopes follow the P115 fixtures: only schedule replies carry start_index and sum.
+ONE_RULE = [{"id": "r1", "delay": 60, "enable": True, "desired_states": {"device_on": False}, "password": "secret"}]
+RULE_RESPONSES = {
+    "get_countdown_rules": {"countdown_rule_max_count": 1, "enable": False, "rule_list": ONE_RULE},
+    "get_antitheft_rules": {"antitheft_rule_max_count": 1, "enable": False, "rule_list": ONE_RULE},
+    "get_schedule_rules": {"schedule_rule_max_count": 32, "enable": False, "rule_list": ONE_RULE, "start_index": 0, "sum": 1},
+}
+# The P115 get_device_info reply with its redacted values replaced by fake ones. Private fields must never leak.
+P115_DEVICE_INFO = {
+    "auto_off_remain_time": 0, "auto_off_status": "off", "avatar": "plug", "charging_status": "normal",
+    "default_states": {"type": "last_states"}, "device_id": "fake-device-id", "device_on": False,
+    "fw_id": "fake-fw-id", "fw_ver": "1.4.8 Build 260804 Rel.045837", "has_set_location_info": True,
+    "hw_id": "fake-hw-id", "hw_ver": "1.0", "ip": "192.0.2.10", "lang": "en_US", "latitude": 123456,
+    "longitude": -456789, "mac": "00-00-5E-00-53-01", "model": "P115", "nickname": "UHJpdmF0ZQ==",
+    "oem_id": "fake-oem-id", "on_time": 0, "overcurrent_status": "normal", "power_protection_status": "normal",
+    "region": "Private/Region", "rssi": -61, "signal_level": 2, "specs": "", "ssid": "UHJpdmF0ZU5ldA==",
+    "time_diff": 60, "type": "SMART.TAPOPLUG",
+}
+P115_PRIVATE = ("fake-", "192.0.2.10", "123456", "456789", "00-00-5E", "UHJpdmF0", "Private", "en_US")
 EXTRA_CASES = [
     ("plug_default_state", {}, "get_device_info", {}),
     ("plug_default_state_set", {"mode": "always_off"}, "set_device_info", {"default_states": {"type": "custom", "state": {"on": False}}}),
@@ -81,7 +97,10 @@ EXTRA_CASES = [
          "start_time": 1320, "end_time": 450, "night_mode_type": "time", "sunrise_offset": 0, "sunset_offset": 0}}),
 ]
 RULE_RESPONSES.update({"get_device_info": {"default_states": {"type": "last_states"}},
-                       "get_energy_usage": {"today_energy": 0, "electricity_charge": [0, 1, 2], "saved_electricity_charge": [0, 0, 0]},
+                       # P115 shape. The fixture redacts the three charge values; integers stand in here.
+                       "get_energy_usage": {"current_power": 0, "electricity_charge": [0, 1, 2], "local_time": "2026-10-11 22:38:00",
+                                            "month_energy": 14, "month_energy_mwh": 13791, "month_runtime": 103,
+                                            "today_energy": 14, "today_energy_mwh": 13791, "today_runtime": 103},
                        "get_electricity_price_config": {"type": "constant", "constant_price": 40},
                        "get_energy_data": {"data": [0, 3], "start_timestamp": 0, "end_timestamp": 3600, "interval": 60},
                        "get_power_data": {"data": [0, 3], "start_timestamp": 0, "end_timestamp": 300, "interval": 5},
@@ -91,7 +110,9 @@ RULE_RESPONSES.update({
     "get_charging_protect": {"charging_enabled": True, "charging_power": 4, "charging_time": 60, "type": 0},
     "get_protection_power": {"enabled": True, "protection_power": 3000},
     "get_max_power": {"max_power": 3500},
-    "get_device_usage": {"time_usage": {"today": 0, "past7": 3, "past30": 4}},
+    "get_device_usage": {"power_usage": {"past30": 14, "past30_mwh": 13791, "past7": 14, "past7_mwh": 13791, "today": 14, "today_mwh": 13791},
+                         "saved_power": {"past30": 89, "past30_mwh": 89209, "past7": 89, "past7_mwh": 89209, "today": 89, "today_mwh": 89209},
+                         "time_usage": {"past30": 103, "past7": 103, "today": 103}},
     "get_delay_action_info": {"enabled": True, "state": {"on": False}, "time": 60},
     "get_calibrate_brightness": {"min_threshold": 10, "max_threshold": 100, "curve_type": 0},
     "get_dimmer_custom_action_info": {"short_press": "toggle", "double_click": "gentle_on", "gentle_on": 1, "gentle_off": 1},
@@ -169,13 +190,19 @@ async def test_one_off_schedule_and_paged_enable(make_house):
     await plugs.schedule(reg, caller, "desk-lamp", "00:00", False, [], when.isoformat())
     assert caller.sent[-1][2] == {"week_day": 0, "mode": 0, "year": when.year, "month": when.month, "day": when.day,
                                  "s_min": 0, "s_type": 1, "e_type": 0, "enable": True, "desired_states": {"device_on": False}}
-    caller.respond("get_countdown_rules", lambda e, p: {"sum": 2, "rule_list": [
-        {"id": "r0" if p["start_index"] == 0 else "r1", "enable": True, "delay": 60}]})
-    await plugs.enable_rule(reg, caller, "desk-lamp", "countdown", False, "r1")
+    caller.respond("get_schedule_rules", lambda e, p: {"schedule_rule_max_count": 32, "enable": True, "sum": 2,
+                   "start_index": p["start_index"], "rule_list": [
+        {"id": "r0" if p["start_index"] == 0 else "r1", "enable": True, "s_min": 60}]})
+    await plugs.enable_rule(reg, caller, "desk-lamp", "schedule", False, "r1")
     assert caller.sent[-2][2] == {"start_index": 1}
-    assert caller.sent[-1][2] == {"id": "r1", "enable": False, "delay": 60}
+    assert caller.sent[-1][2] == {"id": "r1", "enable": False, "s_min": 60}
+    with pytest.raises(RegistryError, match="not found"):
+        await plugs.enable_rule(reg, caller, "desk-lamp", "schedule", False, "missing")
+    # A countdown reply without sum is one page.
+    caller.respond("get_countdown_rules", RULE_RESPONSES["get_countdown_rules"])
     with pytest.raises(RegistryError, match="not found"):
         await plugs.enable_rule(reg, caller, "desk-lamp", "countdown", False, "missing")
+    assert caller.sent[-1] == ("desk-lamp", "get_countdown_rules", {"start_index": 0})
 
 
 async def test_rule_conflict_and_refresh_failure_are_reported(make_house):
@@ -475,3 +502,13 @@ async def test_paging_stops_on_a_malformed_sum(make_house):
     with pytest.raises(RegistryError, match="not found"):
         await plugs.enable_rule(reg, caller, "desk-lamp", "schedule", True, "r9")
     assert caller.methods_sent() == ["get_schedule_rules"]
+
+
+async def test_p115_device_info_reads_leak_nothing_private(make_house):
+    reg, caller, _ = make_house(tier=0, responses={"get_device_info": P115_DEVICE_INFO})
+    assert await plugs.protection(reg, caller, "desk-lamp") == {
+        "device": "desk-lamp", "auto_off_remain_time": 0, "auto_off_status": "off", "charging_status": "normal",
+        "overcurrent_status": "normal", "power_protection_status": "normal"}
+    assert await plugs.default_state(reg, caller, "desk-lamp") == {"device": "desk-lamp", "default_states": {"type": "last_states"}}
+    for out in (await plugs.protection(reg, caller, "desk-lamp"), await plugs.default_state(reg, caller, "desk-lamp")):
+        assert not any(private in str(out) for private in P115_PRIVATE)
