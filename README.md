@@ -97,8 +97,7 @@ needs no login, and it is built for amd64 and arm64.
 Keep the credentials in a file that only you can read, and pass it with `--env-file`:
 
 ```bash
-printf 'TAPO_EMAIL=you@example.com\nTAPO_PASSWORD=your-password\n' > ~/.tolpo.env
-chmod 600 ~/.tolpo.env
+(umask 077; printf 'TAPO_EMAIL=you@example.com\nTAPO_PASSWORD=your-password\n' > ~/.tolpo.env)
 
 docker run --rm -i --network host --env-file ~/.tolpo.env ghcr.io/signerless/tolpo
 ```
