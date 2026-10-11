@@ -140,5 +140,7 @@ No HTTP routes.
 On 2026-10-12, reads on a C225, a C465, a C610 and a D230: every detection type the camera reports, the zones, the alarm
 settings and the last alert. The motion detection switch of the C225 was turned off and on again with `camera_detect_set`.
 A change of the motion sensitivity was refused because the camera does not report a usable range, which is the intended
-behavior. The D230 (behind the hub) reports its components through the hub; most detection and alarm methods are not
+behavior. Turning motion detection off and on again changed its sensitivity label from `medium` to `high` with the digital
+value still 60, as the C225 itself decides when it is switched back on. `camera_detect_set` cannot write the label, so
+the label was set back with a direct request, which moved the digital value to 50, and that was set to 60 again. The D230 (behind the hub) reports its components through the hub; most detection and alarm methods are not
 available on that model. No alarm, light or notification setting was written.
