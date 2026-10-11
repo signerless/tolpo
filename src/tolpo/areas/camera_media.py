@@ -158,7 +158,7 @@ def card_view(raw: dict[str, Any]) -> dict[str, Any]:
     """One memory card, without its password or anything else the owner did not ask for."""
     status = raw.get("status")
     row = {
-        "status": status if isinstance(status, str) else None,
+        "status": clean(status, 24) if isinstance(status, str) else None,  # device text: kept short and flat
         "total_gb": _gb(raw.get("total_space_accurate")),
         "free_gb": _gb(raw.get("free_space_accurate")),
         "video_total_gb": _gb(raw.get("video_total_space_accurate")),
@@ -322,6 +322,7 @@ def _segment(item: dict[str, Any]) -> dict[str, Any] | None:
     if not start:
         return None
     kind = str(item.get("video_type", item.get("vedio_type", "")))
+    kind = kind if kind.isdigit() and len(kind) < 4 else ""  # a number, or nothing: never free text from the device
     return _compact({
         "start": _local(start), "end": _local(end), "start_ts": start,
         "seconds": end - start if end and end >= start else None,

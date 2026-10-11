@@ -11,7 +11,12 @@ How it works, as described by the open source clients that already speak it (go2
 4. The client asks for a live preview with one JSON message. The camera replies with multipart parts; the ones
    typed `video/mp2t` carry encrypted MPEG-TS, which ffmpeg can read as it is.
 
-Only the owner's own account password is ever used. Nothing here knows any default or built-in credential.
+The same login opens other kinds of session: pictures of past recordings and events, and copies of recordings
+(`MediaSession`, `fetch_image`, `download`). The client sends an id of its own, reads the camera's notifications, and
+asks the camera to stop a session before it hangs up.
+
+Only the owner's own account password is ever used. Nothing here knows any default or built-in credential, and
+nothing here handles the pre-shared keys of cameras that use TLS on their media port: those are named, not served.
 """
 
 from __future__ import annotations
