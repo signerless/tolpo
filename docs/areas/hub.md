@@ -6,11 +6,11 @@ Nonempty events follow the audit and python-kasa. No valve fixtures were availab
 
 - `hub_events`: Read recent child trigger logs with UTC time, optionally filtered by child and Unix timestamp.
 - `hub_alarm_config`: Read siren settings, alarm state and available tones, including H100 chime tones.
-- `hub_alarm_set`: Set a tone, volume or duration at level 2 without playing it.
+- `hub_alarm_set`: Set a tone, volume or duration at level 2 without playing it. It refuses to mute the siren.
 - `hub_siren`: Sound or stop the configured hub tone at level 3 with confirmation for each call.
 - `sensor_settings`: Read one sensor setting and return only its public fields.
 - `sensor_sensitivity`: Set T100/T150 sensitivity and detection interval at level 2.
-- `sensor_alarm_set`: Set T300 siren volume and duration at level 2.
+- `sensor_alarm_set`: Set T300 siren volume and duration at level 3 with `set_alarm_config <sensor id>` confirmation.
 - `sensor_siren`: Test the T300 siren at level 3 with `play_alarm <sensor id>` confirmation.
 - `sensor_comfort_temperature`: Set T310/T315 temperature comfort thresholds and an optional local warning flag at level 2.
 - `sensor_comfort_humidity`: Set T310/T315 humidity comfort thresholds and an optional local warning flag at level 2.
@@ -21,16 +21,14 @@ Nonempty events follow the audit and python-kasa. No valve fixtures were availab
 - `valve_defaults_set`: Store boost duration and optional temperature, or hold duration, at level 2.
 - `valve_window_set`: Set open-window behavior and link T110 sensors on the same hub at level 2.
 - `valve_maintenance_start`: Start mechanical calibration or descaling at level 2.
-- `valve_descaling_auto`: Set automatic descaling at level 2.
+- `valve_option_set`: Turn early start or automatic descaling on or off at level 2.
 - `valve_shutdown_set`: Set seasonal shutdown and anti-blocking at level 3 with confirmation.
 - `valve_work_mode_set`: Choose gentle, standard or powerful motor behavior at level 2.
 - `valve_night_set`: Set night mode with optional fixed local hours at level 2.
-- `valve_early_start`: Set early heating for schedule targets at level 2.
-- `valve_frost_set`: Set the frost-protection minimum at level 3 with confirmation.
+- `valve_frost_set`: Set the frost-protection minimum, 5 to 15 C or 41 to 59 F, at level 3 with confirmation.
 - `valve_schedule_set`: Enable or choose the existing local heating schedule mode at level 2.
 - `valve_schedule`: Read compact local schedule blocks without changing their temperature encoding.
-- `sensor_history`: Read native local 24-hour climate arrays, with explicit omitted counts when capped.
-- `valve_history`: Read native local today and yesterday temperature and status arrays.
+- `hub_child_history`: Read the history stored on a T310/T315 (last 24 hours) or a KE100 (today and yesterday), with omitted counts when capped.
 - `hub_child_rename`: Rename a sensor or valve at level 2, refresh its name, and keep its tolpo id stable.
 - `hub_led`: Read H100 or H200 status LED settings.
 - `hub_led_set`: Set H100 or H200 status LED behavior at level 2.

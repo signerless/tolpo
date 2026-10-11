@@ -555,6 +555,12 @@ async def local_history(registry, caller, device: str, *, max_points: int = 48, 
     return out
 
 
+async def child_history(registry, caller, device: str, *, max_points: int = 48) -> dict[str, Any]:
+    """History of a T310/T315 sensor or a KE100 valve, chosen by the child's kind."""
+    entry = registry.resolve_one(device)
+    return await local_history(registry, caller, device, max_points=max_points, valve=entry.kind in VALVE_KINDS)
+
+
 async def rename_child(registry, caller, device: str, name: str) -> dict[str, Any]:
     if not isinstance(name, str) or not name or len(name) > 64 or clean(name) != name:
         raise RegistryError("Name must be 1 to 64 characters on one line without surrounding spaces")
@@ -666,25 +672,18 @@ async def recent_events(registry: Registry, caller: DeviceCaller, hub: str, *, d
 
 
 def tools(ctx):
-    @ctx.tool(title="Local climate sensor history")
-    async def sensor_history(
+    @ctx.tool(title="Local sensor or valve history")
+    async def hub_child_history(
         device: DeviceRef,
-        max_points: Annotated[int, Field(description="Maximum values per native 24-hour array. Omitted counts report truncation", ge=1, le=2880)] = 48,
+        max_points: Annotated[int, Field(description="Maximum values per native array. Omitted counts report truncation", ge=1, le=2880)] = 48,
     ) -> dict[str, Any]:
-        """Read T310/T315 local 24-hour temperature and humidity arrays in native order and units."""
-        await ctx.ready_for([device])
-        with ctx.translated():
-            return await local_history(ctx.registry, ctx.caller, device, max_points=max_points)
+        """Read the history stored on a hub child, in native order and units.
 
-    @ctx.tool(title="Local valve history")
-    async def valve_history(
-        device: DeviceRef,
-        max_points: Annotated[int, Field(description="Maximum values per native day array. Omitted counts report truncation", ge=1, le=2880)] = 48,
-    ) -> dict[str, Any]:
-        """Read locally stored KE100 today and yesterday temperature arrays and status flags."""
+        T310/T315: the last 24 hours of temperature and humidity. KE100: today and yesterday temperature and status.
+        """
         await ctx.ready_for([device])
         with ctx.translated():
-            return await local_history(ctx.registry, ctx.caller, device, max_points=max_points, valve=True)
+            return await child_history(ctx.registry, ctx.caller, device, max_points=max_points)
 
     @ctx.tool(title="Rename hub child", tier=Tier.SETTING)
     async def hub_child_rename(
@@ -772,12 +771,19 @@ def tools(ctx):
         with ctx.translated():
             return await valve_maintenance(ctx.registry, ctx.caller, device, operation)
 
-    @ctx.tool(title="Set automatic valve descaling", tier=Tier.SETTING)
-    async def valve_descaling_auto(device: DeviceRef,
-                                   enabled: Annotated[bool, Field(description="Enable automatic scale-removal cycles")]) -> dict[str, Any]:
-        """Enable or disable KE100 automatic descaling."""
+    @ctx.tool(title="Switch a valve option", tier=Tier.SETTING)
+    async def valve_option_set(
+        device: DeviceRef,
+        option: Annotated[Literal["early_start", "auto_descaling"], Field(
+            description="early_start: heat early to reach schedule targets on time. auto_descaling: automatic scale-removal cycles")],
+        enabled: Annotated[bool, Field(description="Turn the option on or off")],
+    ) -> dict[str, Any]:
+        """Turn KE100 early start or automatic descaling on or off."""
         await ctx.ready_for([device])
         with ctx.translated():
+            if option == "early_start":
+                return await valve_early(ctx.registry, ctx.caller, device, enabled)
+            _choice(option, ("auto_descaling",), "valve option")
             return await valve_auto_descale(ctx.registry, ctx.caller, device, enabled)
 
     @ctx.tool(title="Set valve shutdown", tier=Tier.SECURITY)
@@ -813,14 +819,6 @@ def tools(ctx):
         await ctx.ready_for([device])
         with ctx.translated():
             return await valve_night(ctx.registry, ctx.caller, device, enabled, start_min, end_min)
-
-    @ctx.tool(title="Set valve early start", tier=Tier.SETTING)
-    async def valve_early_start(device: DeviceRef,
-                                enabled: Annotated[bool, Field(description="Heat early to reach scheduled targets on time")]) -> dict[str, Any]:
-        """Enable or disable KE100 early heating for schedule targets."""
-        await ctx.ready_for([device])
-        with ctx.translated():
-            return await valve_early(ctx.registry, ctx.caller, device, enabled)
 
     @ctx.tool(title="Set valve frost minimum", tier=Tier.SECURITY)
     async def valve_frost_set(

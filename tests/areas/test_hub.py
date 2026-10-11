@@ -281,11 +281,11 @@ VALVE_WRITES = [
      {"enable": True, "detected_action": "shutoff_only", "contact_sensor_list": ["child-door"]}),
     ("valve_maintenance_start", "progress_calibration", {"operation": "calibrate"}, {}),
     ("valve_maintenance_start", "remove_scale", {"operation": "descale"}, {}),
-    ("valve_descaling_auto", "set_remove_scale_info", {"enabled": True}, {"auto": True}),
+    ("valve_option_set", "set_remove_scale_info", {"option": "auto_descaling", "enabled": True}, {"auto": True}),
     ("valve_work_mode_set", "set_trv_mode", {"mode": "silent_mode"}, {"trv_mode": "silent_mode"}),
     ("valve_night_set", "set_night_mode_info", {"enabled": True, "start_min": 1320, "end_min": 420},
      {"enable": True, "effective_time": {"type": "custom", "start_min": 1320, "end_min": 420}}),
-    ("valve_early_start", "set_early_start", {"enabled": True}, {"enable": True}),
+    ("valve_option_set", "set_early_start", {"option": "early_start", "enabled": True}, {"enable": True}),
     ("valve_schedule_set", "set_sc_schedule_info", {"enabled": True, "mode": "everyday"}, {"enable": True, "mode": "everyday"}),
 ]
 
@@ -409,8 +409,8 @@ async def test_valve_schedule_read_is_compact_and_preserves_encoding(make_house,
 
 
 @pytest.mark.parametrize("tool,device,method,array,meta", [
-    ("sensor_history", "temp-sensor", "get_temp_humidity_records", "past24h_temp", {"temp_unit": "celsius", "local_time": 1700000000}),
-    ("valve_history", "radiator", "get_temperature_records", "today", {"current_temp": 20.5, "local_time": 1700000000}),
+    ("hub_child_history", "temp-sensor", "get_temp_humidity_records", "past24h_temp", {"temp_unit": "celsius", "local_time": 1700000000}),
+    ("hub_child_history", "radiator", "get_temperature_records", "today", {"current_temp": 20.5, "local_time": 1700000000}),
 ])
 async def test_local_history_numeric_compact_and_errors(make_house, mcp, tool, device, method, array, meta):
     reg, caller, _ = valve_house(make_house, tier=0)
@@ -625,3 +625,13 @@ async def test_events_read_only_sensor_and_switch_children(make_house):
     assert "radiator" not in {slug for slug, _, _ in caller.sent}
     assert {method for _, method, _ in caller.sent} == {"get_trigger_logs"}
 
+
+async def test_history_tool_dispatches_by_child_kind(make_house):
+    reg, caller, _ = valve_house(make_house, tier=0)
+    caller.respond("get_temp_humidity_records", {"past24h_temp": [1]})
+    caller.respond("get_temperature_records", {"today": [2]})
+    assert (await hub.child_history(reg, caller, "temp-sensor"))["past24h_temp"] == [1]
+    assert (await hub.child_history(reg, caller, "radiator"))["today"] == [2]
+    with pytest.raises(RegistryError):
+        await hub.child_history(reg, caller, "desk-lamp")
+    assert caller.methods_sent() == ["get_temp_humidity_records", "get_temperature_records"]
