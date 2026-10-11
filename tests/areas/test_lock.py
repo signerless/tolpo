@@ -103,9 +103,10 @@ def test_a_raw_datagram_is_read_after_its_header():
         datagram(error_code=-1),  # the device reported an error
         datagram({"device_id": "p1", "device_type": "SMART.TAPOPLUG", "device_model": "P115"}),  # a plug
         datagram(record(device_id=None, device_id_md5=None)),  # no id: cannot tell locks apart
-        b"\x02" * 16 + b" " * lock.MAX_DATAGRAM,  # far too big for a discovery reply
+        datagram(record(device_model="x" * lock.MAX_DATAGRAM)),  # a valid lock reply, but far too big for one
         "not bytes",
     ],
+    ids=["empty", "header-only", "bad-json", "not-utf8", "probe", "device-error", "plug", "no-id", "too-big", "not-bytes"],
 )
 def test_anything_that_is_not_a_lock_reply_is_ignored(data):
     assert lock.parse_tdp_reply(data) is None
