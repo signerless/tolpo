@@ -1691,3 +1691,13 @@ async def test_level_two_owner_cannot_run_security_actions_even_with_phrase(make
     assert "allow_methods" not in str(error.value) and "tier" not in str(error.value)
     assert method not in caller.methods_sent()
     reg.refresh.assert_not_awaited()
+
+
+@pytest.mark.parametrize("raw", [10 ** 40, -2, "9" * 60, " 7_0 ", "1e3"])
+async def test_event_codes_from_device_stay_small(make_house, raw):
+    reg, caller, _ = house(make_house, tier=0)
+    caller.respond("getLastAlarmInfo", {"system": {"last_alarm_info": {"last_alarm_time": "1700000000", "last_alarm_type": raw}}})
+    result = await area.events_recent(reg, caller, CAM)
+    assert result["last"]["timestamp"] == 1700000000
+    assert len(str(result)) < 120
+    assert result["last"].get("code", 0) <= 9999 and result["last"]["type"] in set(area.EVENT_TYPES.values()) | {"unknown"}

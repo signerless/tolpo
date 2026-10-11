@@ -674,7 +674,8 @@ def _event(value):
     if type(value) is int or isinstance(value, str):
         try:
             code = int(value)
-            return {"code": code, "type": EVENT_TYPES.get(code, "unknown")}
+            # A device-supplied number stays small in the answer; anything outside a plausible code is just unknown.
+            return {"code": code, "type": EVENT_TYPES.get(code, "unknown")} if 0 <= code <= 9999 else {"type": "unknown"}
         except ValueError:
             if value in EVENT_TYPES.values():
                 return {"type": str(value)}
