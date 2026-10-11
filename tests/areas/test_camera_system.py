@@ -357,12 +357,12 @@ def system_house(make_house, tier=4, system_version=1):
 SYSTEM = [
     ("timezone", "Etc/UTC", "setTimezone", {"system": {"basic": {"timezone": "UTC+00:00", "zone_id": "Etc/UTC", "timing_mode": "ntp"}}}, 2),
     ("upnp", True, "setUpnpInfo", {"upnpc": {"upnpc_info": {"enabled": "on", "mode": "auto"}}}, 3),
-    ("compatibility", False, "setThirdPartyCompatibility", {"local_ctrl": {"third_party_setting": {"enabled": "off"}}}, 3),
+    ("compatibility", False, "setThirdPartyCompatibility", {"local_ctrl": {"third_party_setting": {"enabled": "off"}}}, 4),
     ("account", True, "setAccountEnabled", {"user_management": {"set_account_enabled": {"enabled": "on", "secname": "third_account"}}}, 3),
     ("reboot", None, "rebootDevice", {"system": {"reboot": {}}}, 2),
     ("factory_reset", None, "reset", {"system": {"reset": {}}}, 4),
     ("restore", None, "configRestore", {"system": {"config_restore": {}}}, 4),
-    ("firmware_check", None, "checkFirmwareVersionByCloud", {"cloud_config": {"check_fw_version": "null"}}, 0),
+    ("firmware_check", None, "checkFirmwareVersionByCloud", {"cloud_config": {"check_fw_version": "null"}}, 1),
     ("firmware_update", None, "startFirmwareUpgrade", {"cloud_config": {"fw_download": "null"}}, 4),
     ("auto_update", True, "setFirmwareAutoUpgradeConfig", {"auto_upgrade": {"common": {"enabled": "on", "time": "03:00:00", "random_range": 30}}}, 4),
 ]
@@ -1188,3 +1188,16 @@ async def test_account_enable_requires_existing_login(make_house):
     with pytest.raises(BadRequest, match="no existing stream login"):
         await area.system_change(reg, caller, "hallway-cam", "account", True, "setAccountEnabled hallway-cam")
     assert "setAccountEnabled" not in caller.methods_sent()
+
+
+async def test_exposure_tools_warn_the_agent(make_house, mcp):
+    """The agent reads the docstring: it must learn that UPnP can expose the camera and that the
+    compatibility switch can cut tolpo off before it asks the owner to confirm."""
+    reg, caller = full_house(make_house, 0)
+    async with mcp(reg, caller) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    assert "internet" in tools["camera_system_upnp"].description
+    assert "tolpo itself" in tools["camera_system_compatibility"].description
+    assert "level 4" in tools["camera_system_compatibility"].description
+    assert area.WRITES["setThirdPartyCompatibility"][0] == area.Tier.LIFECYCLE
+    assert area.WRITES["setUpnpInfo"][0] >= area.Tier.SECURITY

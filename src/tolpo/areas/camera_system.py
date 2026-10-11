@@ -519,15 +519,18 @@ READS.update({
 })
 WRITES.update({
     "setTimezone": (Tier.SETTING, "Change camera time zone and use NTP."),
-    "setUpnpInfo": (Tier.SECURITY, "Change camera router port mapping exposure."),
-    "setThirdPartyCompatibility": (Tier.SECURITY, "Change the camera local integration flag."),
+    "setUpnpInfo": (Tier.SECURITY, "Change camera router port mapping. On can make the camera reachable from the internet."),
+    # Off may stop local clients, tolpo included, from reaching the camera, and only the Tapo app can turn it back on.
+    # On widens local exposure. Losing the agent's own access is lifecycle class, like a Wi-Fi change.
+    "setThirdPartyCompatibility": (Tier.LIFECYCLE, "Change the camera third-party compatibility flag. Off may lock tolpo out of the camera."),
     "setAccountEnabled": (Tier.SECURITY, "Enable or disable an existing camera stream login."),
     "rebootDevice": (Tier.SETTING, "Restart the camera."),
     "setReboot": (Tier.SETTING, "Change the camera reboot schedule."),
     "reset": (Tier.LIFECYCLE, "Factory reset the camera and lose its settings."),
     "softReset": (Tier.LIFECYCLE, "Factory reset a newer or battery camera."),
     "configRestore": (Tier.LIFECYCLE, "Restore camera settings to their defaults."),
-    "checkFirmwareVersionByCloud": (Tier.READ, "Ask the camera to check the vendor firmware catalogue."),
+    # Not a read: the camera contacts the vendor cloud and updates its own upgrade state.
+    "checkFirmwareVersionByCloud": (Tier.CONTROL, "Ask the camera to check the vendor firmware catalogue."),
     "startFirmwareUpgrade": (Tier.LIFECYCLE, "Install camera firmware from the vendor cloud."),
     "setFirmwareAutoUpgradeConfig": (Tier.LIFECYCLE, "Change unattended camera firmware updates."),
 })
@@ -773,12 +776,15 @@ def tools(ctx):
 
     @ctx.tool(title="Camera UPnP", tier=Tier.SECURITY)
     async def camera_system_upnp(device: Device, enabled: Annotated[bool, Field(description="Permit router port mapping for this camera")], confirm: Confirm = None) -> dict[str, Any]:
-        """Enable or disable router port mapping with level 3 confirmation."""
+        """Enable or disable UPnP port mapping with level 3 confirmation. On lets the camera ask the router to open a
+        port, which can make the camera reachable from the internet."""
         return await run(system_change, device, "upnp", enabled, confirm)
 
-    @ctx.tool(title="Camera third-party compatibility", tier=Tier.SECURITY)
+    @ctx.tool(title="Camera third-party compatibility", tier=Tier.LIFECYCLE)
     async def camera_system_compatibility(device: Device, enabled: Annotated[bool, Field(description="Allow local third-party integrations on this camera")], confirm: Confirm = None) -> dict[str, Any]:
-        """Change the local compatibility flag with confirmation. The cloud account flag is separate."""
+        """Change the camera's third-party compatibility flag with level 4 confirmation. Warning: turning it off may
+        stop tolpo itself from reaching this camera, and only the Tapo app can turn it back on. Turning it on lets
+        other local clients use the camera. The cloud account flag is separate and is not changed."""
         return await run(system_change, device, "compatibility", enabled, confirm)
 
     @ctx.tool(title="Existing camera stream login", tier=Tier.SECURITY)
@@ -796,9 +802,9 @@ def tools(ctx):
         """Change scheduled reboot status or time while preserving the current days and random spread."""
         return await run(reboot_schedule, device, enabled, time)
 
-    @ctx.tool(title="Check camera firmware")
+    @ctx.tool(title="Check camera firmware", tier=Tier.CONTROL)
     async def camera_system_firmware_check(device: Device) -> dict[str, Any]:
-        """Ask the camera to check the vendor firmware catalogue. Read progress with camera_system_read."""
+        """Ask the camera to check the vendor firmware catalogue. Installs nothing. Read the result with camera_system_read."""
         return await run(system_change, device, "firmware_check")
 
     @ctx.tool(title="Update camera firmware", tier=Tier.LIFECYCLE)
