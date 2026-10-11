@@ -1,8 +1,6 @@
 """MCP tools for local Smart Actions. No cloud calls."""
-import asyncio
 import copy
 import logging
-from contextlib import suppress
 from typing import Annotated, Any
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -17,9 +15,11 @@ from tolpo.policy import Tier
 log = logging.getLogger(__name__)
 
 METHODS = [
-    # UNVERIFIED: direct hub and switch support needs model-specific hardware checks.
-    # The method and sensor log shape are documented in python-kasa TriggerLogs.
-    policy.method("get_trigger_logs", Tier.READ, ["sensor", "switch", "hub"], "Read the local sensor or button trigger log."),
+    # T110, T300 and T310 sensors behind an H200 answer {"start_id": 0} with {"logs": [], "start_id": 0, "sum": 0}
+    # (fixtures). The H200 hub itself refuses the method, so it is not declared for hubs.
+    # UNVERIFIED: the event row shape (id, eventId, event, timestamp) is from python-kasa; every real log was empty.
+    # UNVERIFIED: button switches (S200) behind a hub.
+    policy.method("get_trigger_logs", Tier.READ, ["sensor", "switch"], "Read the local sensor or button trigger log."),
 ]
 
 
@@ -159,24 +159,27 @@ def tools(ctx):
 
     @ctx.tool(title="Configure local automation", tier=Tier.SETTING)
     async def automation_settings(settings: Annotated[Settings, BeforeValidator(settings_input), Field(description="Complete local settings: IANA timezone, coordinates, poll interval, quiet hours and killed switch")]) -> dict[str, Any]:
-        """Replace engine settings. Killing cancels pending runs and blocks ticks until cleared."""
-        canceled = []
+        """Replace engine settings. Killing stops a running evaluation at once, cancels pending runs and blocks
+        ticks until cleared."""
+        eng = engine()
+        if settings.killed:
+            # Do not wait for a running tick: stop the loop first, then record the switch.
+            await eng.halt()
+
         def update(eng):
             eng.state.settings = settings
             if settings.killed:
-                eng.state.runs = []
-                eng.previous = {}
-                eng.holds = {}
-                eng.log_ids = {}
+                eng.kill()
+            else:
+                eng.halted = False
             eng.save()
-            if settings.killed and eng.task:
-                canceled.append(eng.task)
-                eng.task.cancel()
-                eng.task = None
             eng.start()
             return {"settings": settings.model_dump(exclude_none=True)}
-        result = await change(update)
-        for task in canceled:
-            with suppress(asyncio.CancelledError):
-                await task
-        return result
+
+        try:
+            return await change(update)
+        except ToolError:
+            if settings.killed:
+                # The switch could not be saved. Keep this process stopped anyway.
+                eng.kill()
+            raise

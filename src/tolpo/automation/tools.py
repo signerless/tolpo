@@ -32,7 +32,8 @@ class MCPToolExecutor:
         validated = tool.fn_metadata.validate_arguments(params)
         tier = self.tiers[name]
         cfg = self.ctx.registry.cfg
-        allowed = tier <= cfg.tier or name in cfg.allow_methods
+        # `allow_methods` lists device methods. A tool with the same name is not covered by it.
+        allowed = tier <= cfg.tier
         if name in ("set_power", "set_light"):
             refs = validated["targets"]
             refs = [refs] if isinstance(refs, str) else refs

@@ -14,6 +14,7 @@ from tolpo.registry import Forbidden
 from tolpo.views import clean
 
 from .events import RegistrySource
+from .graph import check_rule_graph
 from .models import Rule
 from .store import Run, Store
 from .sun import sun_time
@@ -113,6 +114,8 @@ class Engine:
         self.lock = asyncio.Lock()
         self.task = None
         self.closed = False
+        self.halted = False  # set by the kill switch at once, before it waits for a running tick
+        self.lock_warned = False
 
     def rule(self, ref):
         for rule in self.state.rules:
@@ -128,15 +131,7 @@ class Engine:
             raise ValueError("automation rule id already exists")
         if len(self.state.rules) >= 200:
             raise ValueError("automation rule limit reached")
-        candidate = self.state.rules + [rule]
-        graph = {r.id: [t.rule for t in r.triggers if t.kind == "rule"] for r in candidate}
-        def visit(ref, ancestors):
-            if ref in ancestors:
-                raise ValueError("automation rule cycle is refused")
-            for child in graph.get(ref, []):
-                visit(child, ancestors | {ref})
-        for ref in graph:
-            visit(ref, set())
+        check_rule_graph(self.state.rules + [rule])
         if any(t.kind in ("sunrise", "sunset") for t in rule.triggers) and self.state.settings.latitude is None:
             raise ValueError("sun trigger needs configured latitude and longitude")
         self.state.rules.append(rule)
@@ -174,7 +169,29 @@ class Engine:
     def start(self):
         if not self.closed and not self.state.settings.killed and any(r.enabled for r in self.state.rules):
             if self.task is None or self.task.done():
+                # One engine per state directory. A second tolpo process would fire every action twice.
+                if not self.store.lock():
+                    if not self.lock_warned:
+                        log.warning("another tolpo process runs the automations in this state directory; this one does not")
+                        self.lock_warned = True
+                    return
                 self.task = asyncio.create_task(self._loop(), name="tolpo-automation")
+
+    def kill(self):
+        """Stop everything: no pending runs, no baselines, no ticks until the switch is cleared."""
+        self.halted = True
+        self.state.settings.killed = True
+        self.state.runs = []
+        self.previous, self.holds, self.log_ids = {}, {}, {}
+
+    async def halt(self):
+        """Stop the background loop now, even in the middle of a tick. A reserved cursor is never replayed."""
+        self.halted = True
+        task, self.task = self.task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     async def stop(self):
         self.closed = True
@@ -183,6 +200,7 @@ class Engine:
             with suppress(asyncio.CancelledError):
                 await self.task
             self.task = None
+        self.store.unlock()
 
     async def _loop(self):
         try:
@@ -193,10 +211,11 @@ class Engine:
                 except Exception as exc:
                     # Raw exception text can contain device secrets.
                     log.error("automation tick failed: %s", type(exc).__name__)
-                    self.store.alert({"time": self.clock.now().isoformat(), "error": type(exc).__name__})
+                    with suppress(Exception):
+                        self.store.alert({"time": self.clock.now().isoformat(), "error": type(exc).__name__})
                 await asyncio.sleep(self.state.settings.poll_seconds)
-        except asyncio.CancelledError:
-            raise
+        finally:
+            self.store.unlock()
 
     def _held(self, rule, key, predicate, values, timestamp):
         token = (rule.id, key)
@@ -240,7 +259,8 @@ class Engine:
             result = self.tool_executor.plan(action.tool, action.params)
             level = result.get("level")
             allowed = isinstance(level, int) and 0 <= level <= 4 and bool(result.get("allowed"))
-            allowed = allowed and (level <= self.registry.cfg.tier or action.tool in self.registry.cfg.allow_methods)
+            # `allow_methods` names device methods, not tools. A tool runs only within the owner's level.
+            allowed = allowed and level <= self.registry.cfg.tier
             return {"level": level, "allowed": allowed,
                     **({"confirm": clean(result["confirm"])} if result.get("confirm") else {}),
                     **({"needs_confirmation": True} if result.get("needs_confirmation") else {})}
@@ -256,6 +276,7 @@ class Engine:
         return {"level": 0, "allowed": True}
 
     async def _action(self, action, rule, now, confirm):
+        """Run one action. Returns its level."""
         plan = self.plan(action)
         if not plan.get("allowed"):
             raise Forbidden(f"{action.kind} action is blocked by the owner's policy")
@@ -279,9 +300,14 @@ class Engine:
             await self.registry.refresh(entry, force=True)
             if not entry.online:
                 raise DeviceUnavailableAfterWrite()
+        return plan.get("level", 0)
 
     async def tick(self, *, dry_run=False, confirm=None):
         async with self.lock:
+            if not dry_run and not self.state.settings.killed and self.store.killed_on_disk():
+                # Another tolpo process pulled the kill switch. Obey it here too.
+                self.kill()
+                self.save()
             if self.state.settings.killed:
                 return {"killed": True, "fired": []}
             if dry_run:
@@ -350,7 +376,8 @@ class Engine:
                     old = self.previous.get(trigger.device, {})
                     triggered |= bool(old and current.get("last_alert_timestamp") is not None
                                       and current.get("last_alert_timestamp") != old.get("last_alert_timestamp")
-                                      and (trigger.event is None or trigger.event == current.get("last_alert_type")))
+                                      and (trigger.event is None
+                                           or trigger.event.casefold() == str(current.get("last_alert_type")).casefold()))
             if triggered:
                 queue(rule, [])
         self.previous = sample.values
@@ -359,7 +386,7 @@ class Engine:
             self.save()
         count = 0
         for run in list(self.state.runs):
-            if count >= 200:
+            if count >= 200 or self.halted:
                 break
             count += 1
             rule = self.rule(run.rule)
@@ -369,7 +396,7 @@ class Engine:
             if run.due > stamp:
                 continue
             failed = False
-            while run.cursor < len(rule.actions):
+            while run.cursor < len(rule.actions) and not self.halted:
                 action = rule.actions[run.cursor]
                 run.cursor += 1
                 if action.kind == "delay":
@@ -389,7 +416,9 @@ class Engine:
                 self.save()
                 # Only a fresh confirmation supplied to this tick reaches a due action.
                 try:
-                    await self._action(action, rule, now, confirm)
+                    level = await self._action(action, rule, now, confirm)
+                    if level >= 3:
+                        confirm = None  # one confirmation, one security or lifecycle action
                     plans.append({"rule": rule.id, "action": run.cursor - 1,
                                   **public_action(action), "ok": True})
                 except Exception as exc:
