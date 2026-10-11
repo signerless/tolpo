@@ -181,7 +181,12 @@ The Python wheel includes the package already. No shared source or packaging fil
 
 ## Validation record
 
-73 network tests pass. The Python suite passes with 207 tests after the two socket-heavy files from the brief
+After review, 99 network tests pass and the full suite passes (308 tests). Review added tests for level 4 on
+apply and both rollbacks, single-device targets, allow-list ranges, uncompressed IPv6 conntrack, odd neighbor
+entries, native expiry longer than reviewed, the owner CA file, TLS settings per request, odd router output and the
+audit size limit. Ten safety rules were broken on purpose in a scratch copy, and a test failed each time.
+
+The author's record follows. 73 network tests passed. The Python suite passes with 207 tests after the two socket-heavy files from the brief
 are ignored and `test_real_ffmpeg_failure_names_no_password` is deselected. The latter is an existing socket test:
 this sandbox reports an unreachable connection instead of the refused connection its assertion expects.
 The required command without that extra deselection produced that single failure. Node tests pass (5), release
