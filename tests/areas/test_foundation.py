@@ -349,6 +349,12 @@ def test_a_hub_brings_its_sensors_and_a_vacuum_turns_its_area_on(tmp_path):
     assert on["vacuum"] is True and on["plugs"] is False and on["lights"] is True and on["automation"] is True
 
 
+def test_a_hub_alone_keeps_the_camera_areas_on_for_the_cameras_paired_to_it(tmp_path):
+    """A camera paired to a hub is the hub's child, so only the hub is remembered as a host."""
+    assert decide(tmp_path, "H200")["camera_media"] is True
+    assert decide(tmp_path, "L430C")["camera_media"] is False  # without a hub or a camera there is nothing to see
+
+
 def test_when_nothing_is_known_or_a_model_is_not_recognized_nothing_is_hidden(tmp_path):
     assert all(decide(tmp_path).values())  # no cache yet
     assert all(decide(tmp_path, "L430C", "ZX9000").values())  # a model we cannot place

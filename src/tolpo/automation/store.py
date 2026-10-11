@@ -120,11 +120,15 @@ class Store:
             self._lock_fd = None
 
     def killed_on_disk(self) -> bool:
-        """Whether the saved settings say killed. Another process may have set it."""
-        content = read_private(self.path)
-        if content is None:
+        """Whether the saved settings say killed. Another process, or the owner at a terminal, may have set it. A file
+        that cannot be read says nothing."""
+        try:
+            content = read_private(self.path)
+            if content is None:
+                return False
+            return bool(json.loads(content).get("settings", {}).get("killed"))
+        except (OSError, ValueError, AttributeError):
             return False
-        return bool(json.loads(content).get("settings", {}).get("killed"))
 
     def load(self):
         content = read_private(self.path)

@@ -115,8 +115,9 @@ AREA_KINDS: dict[str, set[str]] = {
     "lock": {"lock"},
 }
 ALWAYS_ON = {"overview"}
-# What a hub brings with it: its sensors, valves, chimes and doorbells are not hosts of their own, so they are not remembered.
-HUB_BRINGS = {"sensor", "valve", "thermostat", "chime", "doorbell"}
+# What a hub brings with it: its sensors, valves, chimes, doorbells and cameras are not hosts of their own, so they are not
+# remembered. A camera paired to a hub is its child, and the camera areas must stay on for it.
+HUB_BRINGS = {"sensor", "valve", "thermostat", "chime", "doorbell", "camera"}
 
 
 def kind_of_model(model: str) -> str | None:

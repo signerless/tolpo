@@ -123,7 +123,11 @@ class Engine:
                 return rule
         raise ValueError("automation rule was not found")
 
-    def save(self):
+    def save(self, *, resuming=False):
+        """Write the state. The owner's stop (from a terminal, or another tolpo process) is in the file, and a save from
+        here must never write it back as running: that would undo it. Only a deliberate resume may."""
+        if not resuming and not self.state.settings.killed and self.store.killed_on_disk():
+            self.kill()
         self.store.save(self.state)
 
     def create(self, rule: Rule):
@@ -251,7 +255,7 @@ class Engine:
 
     def plan(self, action):
         if action.kind == "method":
-            entry = self.registry.resolve_one(action.device)
+            entry = self.registry.by_slug(action.device)
             return self.caller.plan(entry, action.method)
         if action.kind == "tool":
             if self.tool_executor is None:
@@ -265,7 +269,7 @@ class Engine:
                     **({"confirm": clean(result["confirm"])} if result.get("confirm") else {}),
                     **({"needs_confirmation": True} if result.get("needs_confirmation") else {})}
         if action.kind in ("power", "light"):
-            entry = self.registry.resolve_one(action.device)
+            entry = self.registry.by_slug(action.device)
             fields = ["state"] if action.kind == "power" else [
                 {"on": "state", "brightness": "brightness", "color_temp": "color_temperature", "hue": "hsv", "saturation": "hsv"}[key]
                 for key in action.light.model_dump(exclude_none=True)]
@@ -290,7 +294,7 @@ class Engine:
         elif action.kind == "tool":
             await self.tool_executor.execute(action.tool, action.params, confirm=confirm)
         else:
-            entry = self.registry.resolve_one(action.device)
+            entry = self.registry.by_slug(action.device)
             if action.kind == "method":
                 await self.caller.call(entry, action.method, action.params, confirm=confirm)
             elif action.kind == "power":

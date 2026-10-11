@@ -203,7 +203,7 @@ def tools(ctx):
         else:
             with ctx.translated():
                 owner_allows(2, "automation_settings")
-                if eng.state.settings.killed:
+                if eng.state.settings.killed or eng.store.killed_on_disk():  # also a stop the owner made from a terminal
                     owner_allows(3, "automation_resume")
                     if confirm != RESUME_PHRASE:
                         raise NeedsConfirmation(f"automation_resume is a level 3 action: it lets stopped rules act again. To go ahead, call again with confirm={RESUME_PHRASE!r}")
@@ -214,7 +214,7 @@ def tools(ctx):
                 eng.kill()
             else:
                 eng.halted = False
-            eng.save()
+            eng.save(resuming=not settings.killed)
             eng.start()
             return {"settings": settings.model_dump(exclude_none=True)}
 

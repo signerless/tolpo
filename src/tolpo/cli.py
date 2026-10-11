@@ -152,17 +152,33 @@ async def _watch(cfg: Config, ref: str, quality: str, seconds: int | None = None
 def _automation(action: str) -> int:
     """The owner's switch for the automation engine. An agent can stop the rules; only the owner can start them again
     from here, and an agent needs level 3 and a phrase to do it through the tool."""
-    from .automation.store import Store
+    from .automation.store import State, Store
 
     store = Store()
     try:
         state = store.load()
-        if action in ("kill", "resume"):
-            state.settings.killed = action == "kill"
-            store.save(state)
     except (OSError, ValueError) as exc:
-        print(f"The automation state could not be used: {type(exc).__name__}", file=sys.stderr)
-        return 1
+        if action != "kill":
+            print(f"The automation state could not be used: {type(exc).__name__}", file=sys.stderr)
+            return 1
+        # A stop must land even when the file is damaged: keep the damaged file aside and write a stopped state.
+        aside = store.path.with_name("automation.damaged.json")
+        try:
+            os.replace(store.path, aside)
+            os.chmod(aside, 0o600)
+        except OSError:
+            pass
+        state = State()
+        print(f"The automation state was damaged and was kept as {aside.name}; automation is stopped.", file=sys.stderr)
+    if action in ("kill", "resume"):
+        state.settings.killed = action == "kill"
+        if action == "kill":
+            state.runs = []  # what is waiting must not start the moment rules are allowed again
+        try:
+            store.save(state)
+        except OSError as exc:
+            print(f"The automation state could not be saved: {type(exc).__name__}", file=sys.stderr)
+            return 1
     enabled = sum(rule.enabled for rule in state.rules)
     print(f"{len(state.rules)} rule(s), {enabled} enabled. Automation is {'STOPPED' if state.settings.killed else 'running'}.")
     if action == "resume":

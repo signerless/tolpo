@@ -59,12 +59,31 @@ def test_the_state_file_stays_private(tmp_path):
     assert stat.S_IMODE(os.stat(tmp_path / "automation.json").st_mode) == 0o600
 
 
-def test_a_damaged_state_file_is_reported_and_left_alone(tmp_path, capsys):
+def test_a_damaged_state_file_is_reported_by_status_and_resume_and_left_alone(tmp_path, capsys):
     (tmp_path / "automation.json").write_text("{not json")
-    for action in ("status", "kill", "resume"):
+    for action in ("status", "resume"):
         assert run(action) == 1
     assert "could not be used" in capsys.readouterr().err
     assert (tmp_path / "automation.json").read_text() == "{not json"
+
+
+def test_a_stop_lands_even_when_the_state_file_is_damaged(tmp_path, capsys):
+    (tmp_path / "automation.json").write_text("{not json")
+    assert run("kill") == 0
+    assert "kept as automation.damaged.json" in capsys.readouterr().err
+    assert (tmp_path / "automation.damaged.json").read_text() == "{not json"  # nothing is lost
+    assert saved(tmp_path)["settings"]["killed"] is True and Store(tmp_path).killed_on_disk()
+    assert stat.S_IMODE(os.stat(tmp_path / "automation.damaged.json").st_mode) == 0o600
+
+
+def test_a_stop_also_empties_what_was_waiting_to_run(tmp_path):
+    from tolpo.automation.store import Run
+
+    store = Store(tmp_path)
+    store.save(State(rules=[one_rule()], runs=[Run(rule="r1", cursor=1, due=1e12)]))
+    assert saved(tmp_path)["runs"]
+    assert run("kill") == 0
+    assert saved(tmp_path)["runs"] == []  # after a resume, nothing old starts at once
 
 
 def test_an_unknown_action_is_refused():

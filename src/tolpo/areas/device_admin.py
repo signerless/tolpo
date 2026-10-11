@@ -484,7 +484,7 @@ async def room_power(registry, caller, name, on):
     if type(on) is not bool:
         raise RegistryError("Power state must be a boolean.")
     slugs = resolve_room(name)
-    entries = [registry.resolve_one(slug) for slug in slugs]
+    entries = [registry.by_slug(slug) for slug in slugs]
     # Check the whole room first. Camera state is privacy, never a power relay.
     for entry in entries:
         if entry.kind not in policy.POWER_KINDS:

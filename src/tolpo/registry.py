@@ -9,7 +9,9 @@ import hashlib
 import ipaddress
 import json
 import logging
+import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime
@@ -163,7 +165,10 @@ class Registry:
         # host -> {"seen", "name", "model"}. Never shrinks because one scan missed a device.
         self._known: dict[str, dict[str, Any]] = self._load_cache()
         # device key -> slug. A device keeps the short id it was first given, also after a rename or a restart.
-        self._slugs: dict[str, str] = self._load_slugs()
+        self._slugs: dict[str, str] = {}
+        self._slug_seen: dict[str, float] = {}  # device key -> when a device with that key was last here
+        self._load_slugs()
+        self._missing: dict[str, int] = {}  # hub child id -> updates in a row in which its hub did not list it
         self.retry_delays = RETRY_DELAYS
         self.boot_grace = BOOT_GRACE
         self._connecting: set[str] = set()  # hosts with a connection attempt in flight
@@ -390,31 +395,71 @@ class Registry:
             return {}
         return {h: info for h, info in raw.items() if isinstance(info, dict)}
 
-    def _load_slugs(self) -> dict[str, str]:
-        """The slugs given in earlier runs. Anything that does not look like one is ignored, never trusted."""
+    def _read_slugs(self) -> tuple[dict[str, str], dict[str, float]]:
+        """The slugs in the cache file and when each was last seen. Anything that does not look right is ignored."""
         if not self._cache:
-            return {}
+            return {}, {}
         try:
-            raw = json.loads(self._cache.read_text()).get("slugs", {})
+            data = json.loads(self._cache.read_text())
+            raw, seen = data.get("slugs", {}), data.get("slug_seen", {})
         except (OSError, ValueError, AttributeError):
-            return {}
+            return {}, {}
         if not isinstance(raw, dict):
-            return {}
-        out, used = {}, set()
-        for key, slug in list(raw.items())[:SLUGS_MAX]:
+            return {}, {}
+        seen = seen if isinstance(seen, dict) else {}
+        out, when, used, now = {}, {}, set(), time.time()
+        # newest first, so that a file with too many entries keeps the devices that are still around
+        ranked = sorted(raw.items(), key=lambda kv: -(seen.get(kv[0]) if isinstance(seen.get(kv[0]), (int, float)) else now))
+        for key, slug in ranked[:SLUGS_MAX]:
             if isinstance(key, str) and isinstance(slug, str) and _SLUG.fullmatch(slug) and len(slug) <= 64 and slug not in used:
                 out[key] = slug
                 used.add(slug)
-        return out
+                stamp = seen.get(key)
+                when[key] = float(stamp) if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) else now
+        return out, when
+
+    def _load_slugs(self) -> None:
+        self._slugs, self._slug_seen = self._read_slugs()
+
+    def _merge_slugs_from_disk(self) -> None:
+        """Another tolpo process may have given short ids since this one started. Take what this one does not know, so
+        that two processes that share the cache give a device the same short id."""
+        disk, when = self._read_slugs()
+        used = set(self._slugs.values())
+        for key, slug in disk.items():
+            if key not in self._slugs and slug not in used:
+                self._slugs[key], self._slug_seen[key] = slug, when[key]
+                used.add(slug)
+            elif key in self._slugs:
+                self._slug_seen[key] = max(self._slug_seen.get(key, 0.0), when.get(key, 0.0))
 
     def _save_cache(self) -> None:
         if not self._cache:
             return
         cutoff = time.time() - CACHE_MAX_AGE
         self._known = {h: i for h, i in self._known.items() if i.get("seen", 0) >= cutoff}
+        self._merge_slugs_from_disk()
+        here = {device_key(e.device) for e in self._entries.values()}
+        # A short id is given up for good only when its device has been away as long as a host is remembered.
+        keep = [k for k in self._slugs if k in here or self._slug_seen.get(k, 0.0) >= cutoff]
+        keep = sorted(keep, key=lambda k: -self._slug_seen.get(k, 0.0))[:SLUGS_MAX]
+        for key in set(self._slugs) - set(keep):
+            self._slugs.pop(key, None)
+            self._slug_seen.pop(key, None)
+        document = json.dumps(
+            {"version": 2, "hosts": self._known, "slugs": self._slugs, "slug_seen": {k: self._slug_seen[k] for k in self._slugs if k in self._slug_seen}}
+        )
         try:
             self._cache.parent.mkdir(parents=True, exist_ok=True)
-            self._cache.write_text(json.dumps({"version": 2, "hosts": self._known, "slugs": self._slugs}))
+            # Write a whole new file and move it into place, so that a crash cannot leave half a cache behind.
+            fd, tmp = tempfile.mkstemp(prefix=".hosts-", dir=self._cache.parent)
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    stream.write(document)
+                os.replace(tmp, self._cache)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
         except OSError as exc:
             log.warning("could not save the host cache: %s", exc)
 
@@ -439,6 +484,7 @@ class Registry:
                 asyncio.ensure_future(self._quiet_disconnect(old))
         entry.last_update = time.monotonic()
         entry.online, entry.error = True, None
+        self._slug_seen[device_key(device)] = time.time()
         return entry
 
     @staticmethod
@@ -477,17 +523,31 @@ class Registry:
             return [self._entries[ref]]
         low = ref.lower()
         items = list(self._entries.values())
-        for e in items:
-            if e.slug == low:
-                return [e]
-        by_name = [e for e in items if (e.device.alias or "").lower() == low]
-        if by_name:
-            return by_name
+        # A short id outlives a rename, so it can name one device while a different device now has that exact name.
+        # Both match then, and the caller is asked to be specific instead of the older id winning.
+        by_slug = [e for e in items if e.slug == low]
+        found = by_slug + [e for e in items if (e.device.alias or "").lower() == low and e not in by_slug]
+        if found:
+            return found
         if any(c in ref for c in "*?["):
             return [
                 e for e in items if fnmatch.fnmatchcase(e.slug, low) or fnmatch.fnmatchcase((e.device.alias or "").lower(), low)
             ]
         return []
+
+    def forget(self, entry: Entry) -> None:
+        """Drop a device that is known to be gone, for example a hub child that was just removed. It keeps its short id for
+        the day it is paired again."""
+        self._entries.pop(entry.device.device_id, None)
+        self._missing.pop(entry.device.device_id, None)
+
+    def by_slug(self, slug: str) -> Entry:
+        """The device that has exactly this short id. Rules and rooms point at short ids, so a device that is missing is an
+        error, never another device with a similar name."""
+        for entry in self._entries.values():
+            if entry.slug == slug:
+                return entry
+        raise NotFound(f"no device has the short id {slug!r}")
 
     def resolve_one(self, ref: str) -> Entry:
         found = self.resolve(ref)
@@ -521,11 +581,18 @@ class Registry:
         children = top.device.children or []
         for child in children:
             self._upsert(child, top)
-        # A child that was unpaired is no longer in the hub's list. Only a successful update says so.
+        # A child that was unpaired is no longer in the hub's list. One list can be partial (a later page that did not come
+        # back is not an error to the library), so a child goes only after two updates in a row that leave it out.
         present = {child.device_id for child in children}
         for did, entry in list(self._entries.items()):
-            if entry.root is top and did not in present:
-                del self._entries[did]
+            if entry.root is not top:
+                continue
+            if did in present:
+                self._missing.pop(did, None)
+            elif self._missing.get(did, 0) + 1 >= 2:
+                self.forget(entry)
+            else:
+                self._missing[did] = self._missing.get(did, 0) + 1
         self._mark(top, online=True)
 
     def _mark(self, top: Entry, *, online: bool, error: str | None = None) -> None:
@@ -640,6 +707,8 @@ class Registry:
         if on is None and not changes:
             raise BadRequest("nothing to change")
 
+        if on is not None:
+            self._require_write(entry, "state")  # switching on or off is the same level 1 action as set_power
         for fid, val in (("brightness", brightness), ("color_temperature", color_temp), ("hsv", hue)):
             if val is not None:
                 feat = self._require_write(entry, fid)

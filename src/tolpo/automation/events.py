@@ -41,7 +41,7 @@ class RegistrySource:
         entries = {}
         for ref in sorted(refs):
             try:
-                entries[ref] = self.registry.resolve_one(ref)
+                entries[ref] = self.registry.by_slug(ref)
             except Exception as exc:
                 sample.errors.append({"device": ref, "error": type(exc).__name__})
         tops = set()

@@ -975,3 +975,57 @@ async def test_a_rule_naming_an_unknown_or_ambiguous_device_is_refused_and_nothi
             refused = await call(client, "automation_create", rule=data)
             assert refused.is_error and "no single device" in refused.content[0].text
         assert (await call(client, "automation_list")).structured_content["rules"] == []
+
+
+@pytest.mark.anyio
+async def test_a_rule_finds_its_device_by_short_id_only_never_by_name(setup):
+    """A rule is pinned to the short id it was made with. If that device is gone, a device with a similar name is not used."""
+    eng, source, clock, reg, caller, devices = setup()
+    devices["office1"].features["state"].value = False
+    eng.create(rule(actions=[{"kind": "power", "device": "Office 1", "on": True}]))  # a name, not a short id
+    result = await eng.tick()
+    assert result["errors"][0]["error"] == "NotFound"
+    assert devices["office1"].is_on is False and devices["lamp"].is_on is False
+
+
+@pytest.mark.anyio
+async def test_a_save_by_a_running_engine_never_undoes_the_owners_stop(setup, tmp_path):
+    eng, source, clock, reg, caller, devices = setup(tier=2)
+    eng.create(rule())
+    owner = Store(tmp_path)  # what `tolpo automation kill` does: it writes the file of a server that is running
+    state = owner.load()
+    state.settings.killed = True
+    owner.save(state)
+    eng.create(rule("r2", triggers=[{"kind": "clock", "time": "13:00"}]))  # any save by the engine
+    assert Store(tmp_path).killed_on_disk() and eng.state.settings.killed and eng.halted
+    assert await eng.tick() == {"killed": True, "fired": []}
+
+
+@pytest.mark.anyio
+async def test_the_agent_cannot_resume_a_stop_the_owner_made_in_a_terminal_without_level_3(make_house, mcp, tmp_path):
+    reg, caller, _ = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_list")).is_error  # the engine exists and is running
+        owner = Store(tmp_path)
+        state = owner.load()
+        state.settings.killed = True
+        owner.save(state)
+        for confirm in (None, "automation_resume"):
+            args = {"settings": {"killed": False}, **({"confirm": confirm} if confirm else {})}
+            refused = await call(client, "automation_settings", **args)
+            assert refused.is_error and "level 3" in refused.content[0].text
+        assert Store(tmp_path).killed_on_disk()
+
+
+@pytest.mark.anyio
+async def test_a_deliberate_resume_does_clear_the_stop(make_house, mcp, tmp_path):
+    reg, caller, _ = make_house(tier=3)
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_list")).is_error
+        owner = Store(tmp_path)
+        state = owner.load()
+        state.settings.killed = True
+        owner.save(state)
+        resumed = await call(client, "automation_settings", settings={"killed": False}, confirm="automation_resume")
+        assert not resumed.is_error
+        assert not Store(tmp_path).killed_on_disk()

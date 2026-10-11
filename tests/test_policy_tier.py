@@ -48,6 +48,16 @@ async def test_at_level_0_power_and_light_changes_are_refused_and_not_offered():
     assert "power" not in reg.capabilities(lamp) and "brightness" not in reg.capabilities(bulb)
 
 
+@pytest.mark.parametrize("settings", [{"on": True}, {"on": False}, {"on": True, "brightness": 40}])
+async def test_switching_a_light_on_or_off_through_set_light_is_a_level_1_action_too(settings):
+    reg, devices = house(tier=0)
+    bulb = reg.resolve_one("office-1")
+    before = devices["office1"].is_on
+    with pytest.raises(Forbidden):
+        await reg.set_light(bulb, **settings)
+    assert devices["office1"].is_on == before
+
+
 async def test_at_level_1_they_work_as_before():
     reg, devices = house(tier=1)
     await reg.set_power(reg.resolve_one("desk-lamp"), True)

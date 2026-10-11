@@ -378,7 +378,7 @@ async def pair_remove(registry, adapter, entry, child, confirm=None):
     state = await refresh(registry, entry)
     removed = target.device.device_id not in {d.device_id for d in entry.device.children}
     if removed:
-        target.online, target.error = False, "Removed from hub"
+        registry.forget(target)  # the hub confirmed it, so it need not wait for a second update to leave the list
     return {"device": clean(entry.slug), "child": clean(target.slug), "removed": removed, **state}
 
 
