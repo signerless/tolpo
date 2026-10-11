@@ -281,21 +281,23 @@ async def test_battery_range_and_versions(make_house):
 async def test_charging_privacy_confirmation_and_support(make_house):
     from tolpo.calls import NeedsConfirmation
     reg, caller = battery_house(make_house, 3)
-    for confirm in [None, "setChargingPrivacyMode other"]:
+    for confirm in [None, "setChargingMode other"]:
         with pytest.raises(NeedsConfirmation):
             await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", False, confirm)
-    await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", False, "setChargingPrivacyMode hallway-cam")
-    assert caller.sent[-1][2] == {"battery": {"charging_privacy_mode": {"enabled": "off"}}}
-    caller.respond("setChargingPrivacyMode", {"error_code": -1})
+    assert "setChargingMode" not in caller.methods_sent()
+    await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", False, "setChargingMode hallway-cam")
+    assert caller.sent[-1] == ("hallway-cam", "setChargingMode", {"battery": {"charging_mode": {"charging_privacy_mode": "off"}}})
+    caller.respond("setChargingMode", {"error_code": -1})
     with pytest.raises(DeviceUnavailable):
-        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingPrivacyMode hallway-cam")
+        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingMode hallway-cam")
     reg, caller = battery_house(make_house, 2)
-    with pytest.raises(Forbidden):
-        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingPrivacyMode hallway-cam")
+    with pytest.raises(Forbidden, match="level 3"):
+        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingMode hallway-cam")
+    assert "setChargingMode" not in caller.methods_sent()
     reg, caller = battery_house(make_house)
     caller.respond("getBatteryCapability", {"battery": {"capability": {"charging_privacy_mode_support": "0"}}})
     with pytest.raises(BadRequest, match="charging privacy support"):
-        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingPrivacyMode hallway-cam")
+        await area.battery_change(reg, caller, "hallway-cam", "charging_privacy", True, "setChargingMode hallway-cam")
 
 
 async def test_statistics_wire_and_hidden_fields(make_house):
@@ -546,7 +548,7 @@ TOOLS = [
     ("camera_battery_mode", {"setting": "power_mode", "value": "solar"}, "setPowerMode"),
     ("camera_battery_clips", {"length_seconds": 30, "buffer_seconds": 5, "retrigger_seconds": 10}, "setClipsConfig"),
     ("camera_battery_wake_up", {"wake_type": "doorbell"}, "setWakeUpConfig"),
-    ("camera_battery_charging_privacy", {"enabled": True, "confirm": "setChargingPrivacyMode hallway-cam"}, "setChargingPrivacyMode"),
+    ("camera_battery_charging_privacy", {"enabled": True, "confirm": "setChargingMode hallway-cam"}, "setChargingMode"),
     ("camera_battery_statistics", {"days": 2}, "getBatteryStatistic"),
     ("camera_audio_read", {"setting": "microphone"}, "getAudioConfig"),
     ("camera_audio_volume", {"target": "microphone", "volume": 0}, "setMicrophoneVolume"),

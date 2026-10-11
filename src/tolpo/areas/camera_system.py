@@ -280,7 +280,7 @@ READS.update({
 WRITES.update({m: (Tier.SETTING, s) for m, s in {
     "setNightVisionModeConfig": "Change camera night vision mode.",
     "setRotationStatus": "Change camera image orientation.",
-    "setHDR": "Change camera HDR processing.",
+    "setHDR": "Change camera HDR processing.",  # UNVERIFIED module and section, see image_change
     "setImageStyleConfig": "Change camera image style.",
     "setOsd": "Change camera video overlays.",
 }.items()})
@@ -355,6 +355,7 @@ async def image_change(registry, caller, device, setting, value, confirm=None):
         value = choice(value, cap.get("image_style_range"), "Image style")
         return await write(registry, caller, entry, "setImageStyleConfig", "image", "common", {"style": value}, {setting: value})
     if setting == "hdr":
+        # UNVERIFIED: the audit could not resolve setHDR's module and section; `video.set_hdr` is inferred.
         flag = switch(value)
         cap = await capability(caller, entry, found, "video_capability")
         hdr = "1" if flag == "on" else "0"
@@ -412,7 +413,8 @@ READS.update({
     "wake_up": Read("getWakeUpConfig", "wakeUp", "wake_up", "config", ("wake_up_type",)),
     "pir": Read("getPirSensitivity", "pir", "pir", "config", ("sensitivity",)),
     "charging": Read("getChargingMode", "battery", "battery", "charging_mode", ("adapter_mode", "charging_privacy_mode")),
-    "charging_privacy": Read("getChargingPrivacyMode", "battery", "battery", "charging_privacy_mode", ("enabled",)),
+    # UNVERIFIED: the audit names the field `status`; `enabled` is kept in case a model uses it. No fixture yet.
+    "charging_privacy": Read("getChargingPrivacyMode", "battery", "battery", "charging_privacy_mode", ("status", "enabled")),
     # UNVERIFIED: statistic response nesting needs a camera or doorbell fixture.
     "statistics": Read("getBatteryStatistic", "batCamStatistics", "battery", "statistic", ("day", "day_num", "time", "bat_per", "bat_usage", "day_runtime", "hour_runtime", "pir_wakeup_with_event", "pir_only_wakeup", "solar_charge_cap", "always_on_status", "bat_status")),
 })
@@ -421,7 +423,9 @@ WRITES.update({
     "setBatteryOperatingMode": (Tier.SETTING, "Change camera battery working mode."),
     "setClipsConfig": (Tier.SETTING, "Change camera clip duration and retrigger behavior."),
     "setWakeUpConfig": (Tier.SETTING, "Change what wakes a battery camera."),
-    "setChargingPrivacyMode": (Tier.SECURITY, "Change camera privacy while charging."),
+    # The app switches charging privacy with setChargingMode (`battery.charging_mode`, field `charging_privacy_mode`),
+    # not with setChargingPrivacyMode. UNVERIFIED on a device: no battery camera fixture has this response yet.
+    "setChargingMode": (Tier.SECURITY, "Change camera privacy while charging. Off lets a charging camera record."),
 })
 
 
@@ -452,7 +456,8 @@ async def battery_change(registry, caller, device, setting, value, confirm=None)
     else:
         if cap.get("charging_privacy_mode_support") not in ("1", "on", True):
             raise BadRequest(f"{entry.slug} does not report charging privacy support")
-        payload, method = {"enabled": switch(value)}, "setChargingPrivacyMode"
+        payload, method = {"charging_privacy_mode": switch(value)}, "setChargingMode"
+        spec = replace(spec, section="charging_mode")
     return await write(registry, caller, entry, method, spec.module, spec.section, payload, {setting: value}, confirm)
 
 
