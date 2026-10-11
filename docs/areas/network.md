@@ -25,8 +25,12 @@ The default file is `~/.config/tolpo/network.toml`. `TOLPO_NETWORK_CONFIG` overr
 No file means no configured providers. Settings load only when a network tool runs.
 The file must belong to the current user and have no group or other permissions. Symlinks are refused.
 Even a file containing only environment-variable names must be private. Inline passwords, tokens and unknown keys
-are rejected without echoing their contents. HTTPS and certificate verification are mandatory. Install the owner's
-CA in the system trust store for a self-signed console. Redirects and environment proxies are disabled.
+are rejected without echoing their contents. HTTPS and certificate verification are mandatory and cannot be
+turned off. By default tolpo trusts the public CA bundle that ships with httpx, not the system trust store, and it
+ignores `SSL_CERT_FILE`. For a console with a self-signed certificate, set `ca_file` on that provider to an absolute
+path of a PEM file holding the console's CA or certificate. That provider then trusts only that file, and the host
+name in `host` must still match the certificate. Other providers are not affected. Redirects and environment proxies
+are disabled.
 
 Example with synthetic provider names:
 

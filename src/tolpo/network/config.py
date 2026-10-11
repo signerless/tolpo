@@ -33,6 +33,7 @@ class ProviderConfig:
     username_env: str = ""
     site: str = ""
     conntrack_file: str = "/proc/net/nf_conntrack"
+    ca_file: str = ""  # Optional owner CA for a self-signed console. Verification stays on.
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,10 @@ def load(path: Path | None = None) -> Settings:
             if set(item) - set(ProviderConfig.__dataclass_fields__):
                 raise ValueError
             p = ProviderConfig(**item)
+            if not all(isinstance(getattr(p, f), str) for f in ProviderConfig.__dataclass_fields__):
+                raise ValueError
+            if p.ca_file and (p.kind == "linux" or not Path(p.ca_file).expanduser().is_absolute()):
+                raise ValueError
             if p.kind not in {"pihole", "adguard", "openwrt", "mikrotik", "opnsense", "unifi", "linux"}:
                 raise ValueError
             if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", p.name):

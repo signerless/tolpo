@@ -75,6 +75,9 @@ def test_config_missing_override_and_env_names(tmp_path, monkeypatch):
     '[[providers]]\nname="x"\nkind="pihole"\nhost="https://dns.example.test?token=hidden-value"\nsecret_env="NETWORK_TEST_SECRET"',
     '[[providers]]\nname="x"\nkind="pihole"\nhost="https://dns.example.test"\nsecret_env="bad-name"',
     '[[providers]]\nname="x"\nkind="pfsense"', '[[providers]]\nname="x"\nkind="linux"\npassword="hidden-value"',
+    '[[providers]]\nname="x"\nkind="pihole"\nhost=5\nsecret_env="NETWORK_TEST_SECRET"',
+    '[[providers]]\nname="x"\nkind="pihole"\nhost="https://dns.example.test"\nsecret_env="NETWORK_TEST_SECRET"\nca_file="relative.pem"',
+    '[[providers]]\nname="x"\nkind="linux"\nca_file="/absolute/ca.pem"',
 ])
 def test_config_refuses_secrets_insecure_transport_and_invalid_inputs(tmp_path, contents):
     with pytest.raises(NetworkError) as error:
@@ -91,6 +94,20 @@ def test_config_owner_only_and_symlink(tmp_path):
     link.symlink_to(path)
     with pytest.raises(NetworkError):
         load(link)
+
+
+def test_owner_ca_file_is_scoped_and_keeps_verification(tmp_path):
+    import certifi
+    import ssl
+    path = config_file(tmp_path, f'[[providers]]\nname="dns"\nkind="pihole"\nhost="https://dns.example.test"\nsecret_env="NETWORK_TEST_SECRET"\nca_file="{certifi.where()}"\n')
+    owned = PiHole(load(path).providers[0])
+    context = owned.tls()
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    assert PiHole(cfg("pihole")).tls() is True  # Other providers keep default trust.
+    with pytest.raises(NetworkError, match="CA file") as error:
+        PiHole(cfg("pihole", ca_file=str(tmp_path / "missing.pem"))).tls()
+    assert "missing" not in str(error.value)
 
 
 def mock_http(responses, seen=None):

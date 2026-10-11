@@ -9,6 +9,7 @@ from ipaddress import ip_address
 import json
 from pathlib import Path
 import re
+import ssl
 import time
 from typing import Any
 
@@ -63,6 +64,21 @@ class HTTPProvider(Provider):
         self.transport = transport
         self.sid = ""
         self.sid_until = 0.0
+        self._tls = None
+
+    def tls(self):
+        """Default trust, or only the owner's CA file for this one provider. Never disables verification."""
+        if not self.cfg.ca_file:
+            return True
+        if self._tls is None:
+            try:
+                context = ssl.create_default_context(cafile=str(Path(self.cfg.ca_file).expanduser()))
+            except (OSError, ssl.SSLError, ValueError):
+                raise NetworkError(f"{text(self.name)}: CA file cannot be loaded") from None
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            self._tls = context
+        return self._tls
 
     async def request(self, method: str, path: str, *, params=None, body=None, authenticate=True):
         headers = {}
@@ -81,9 +97,10 @@ class HTTPProvider(Provider):
                     self.sid = session["sid"]
                     self.sid_until = time.monotonic() + min(float(session.get("validity", 300)), 1800)
                 headers["X-FTL-SID"] = self.sid
+        verify = self.tls()
         try:
             async with httpx.AsyncClient(base_url=self.cfg.host, transport=self.transport,
-                                        timeout=10, verify=True, follow_redirects=False, trust_env=False) as client:
+                                        timeout=10, verify=verify, follow_redirects=False, trust_env=False) as client:
                 async with client.stream(method, path, params=params, json=body, headers=headers, auth=auth) as response:
                     if response.status_code in {401, 403}:
                         raise NetworkError(f"{text(self.name)}: authentication or permission rejected")
