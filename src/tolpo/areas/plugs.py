@@ -3,7 +3,7 @@
 import base64
 import math
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -195,19 +195,27 @@ async def low_power(registry, caller, device, enabled):
 async def led_set(registry, caller, device, mode, start=None, end=None):
     if mode not in ("always", "never", "night_mode"):
         raise ValueError("LED mode must be always, never or night_mode")
-    params = {"led_rule": mode}
+    window = None
     if mode == "night_mode":
         first, last = minute(start), minute(end)
         if first == last:
             raise ValueError("LED night window must be nonzero")
-        # UNVERIFIED: time is the candidate fixed-window enum. The P115 fixture
-        # confirms the nested night_mode object but only sunrise_sunset was captured.
-        params["night_mode"] = {"night_mode_type": "time", "start_time": first, "end_time": last}
+        window = {"night_mode_type": "time", "start_time": first, "end_time": last}
     elif start is not None or end is not None:
         raise ValueError("start and end only apply to night_mode")
     # Dimmers may be lights. Ordinary lights belong to the lights area.
-    entry = registry.resolve_one(device)
-    kinds = HARDWARE_KINDS if entry.device.device_type.name == "Dimmer" else KINDS
+    found = registry.resolve_one(device)
+    kinds = HARDWARE_KINDS if found.device.device_type.name == "Dimmer" else KINDS
+    entry = target(registry, device, kinds)
+    # python-kasa writes the whole current LED object with the new rule. Do the same, so a mode change
+    # does not drop the stored night window or brightness settings.
+    current = compact(response_object(entry, "get_led_info", await caller.call(entry, "get_led_info")), LED_FIELDS)
+    params = {**current, "led_rule": mode}
+    if window:
+        night = current.get("night_mode") if isinstance(current.get("night_mode"), dict) else {}
+        # UNVERIFIED: time is the candidate fixed-window enum. The P115 fixture
+        # confirms the nested night_mode object but only sunrise_sunset was captured.
+        params["night_mode"] = {**night, **window}
     return await write(registry, caller, device, "set_led_info", params, kinds=kinds)
 
 
@@ -264,6 +272,8 @@ async def energy_history(registry, caller, device, series, start, end, interval,
     method = "get_power_data" if series == "power" else "get_energy_data_mwh" if precision == "mwh" else "get_energy_data"
     out = await read(registry, caller, device, method, HISTORY_FIELDS,
                      {"start_timestamp": start, "end_timestamp": end, "interval": interval})
+    if any(not isinstance(out.get(key, []), list) for key in ("data", "charge_data")):
+        raise DeviceUnavailable(f"{out['device']}: {method} returned an invalid sample list")
     if any(len(out.get(key, [])) > 513 for key in ("data", "charge_data")):
         raise DeviceUnavailable(f"{out['device']}: {method} returned too many samples")
     return out
@@ -344,6 +354,11 @@ def calendar(days, on_date):
             when = date.fromisoformat(on_date)
         except ValueError:
             raise ValueError("date must be a valid calendar date") from None
+        # A one-off rule in the past may never run or run at once; far-future dates are not a real need.
+        # One day of slack covers the gap between the host clock and the device's local time.
+        today = date.today()
+        if not today - timedelta(days=1) <= when <= today + timedelta(days=366):
+            raise ValueError("date must be from yesterday up to one year ahead")
         out.update(year=when.year, month=when.month, day=when.day)
     return out
 
@@ -449,7 +464,8 @@ async def enable_rule(registry, caller, device, kind, enabled, identifier=None):
                 payload["enable"] = enabled
                 return await save_rule(registry, caller, device, kind, payload, identifier)
         index += len(rules)
-        if not rules or index >= raw.get("sum", index):
+        total = raw.get("sum")
+        if not rules or type(total) is not int or index >= total:
             break
     raise RegistryError(f"{views.clean(entry.slug)}: {kind} rule {identifier} was not found in the returned pages")
 

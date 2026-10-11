@@ -1,7 +1,8 @@
 """Fake-only plug and switch protocol tests. No discovery or device sockets."""
 
-from unittest.mock import AsyncMock
+from datetime import date, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from kasa import DeviceType
@@ -73,9 +74,11 @@ EXTRA_CASES = [
     ("switch_calibration_set", {"minimum": 10, "maximum": 100, "curve_type": 1}, "set_calibrate_brightness", {"min_threshold": 10, "max_threshold": 100, "curve_type": 1}),
     ("switch_low_power_set", {"enabled": True}, "set_device_info", {"low_power_mode": 1}),
     ("plug_led", {}, "get_led_info", {}),
-    ("plug_led_set", {"mode": "never"}, "set_led_info", {"led_rule": "never"}),
+    ("plug_led_set", {"mode": "never"}, "set_led_info", {"led_rule": "never", "led_status": False, "night_mode": {
+        "start_time": 1130, "end_time": 471, "night_mode_type": "sunrise_sunset", "sunrise_offset": 0, "sunset_offset": 0}}),
     ("plug_led_set", {"mode": "night_mode", "start": "22:00", "end": "07:30"}, "set_led_info",
-     {"led_rule": "night_mode", "night_mode": {"night_mode_type": "time", "start_time": 1320, "end_time": 450}}),
+     {"led_rule": "night_mode", "led_status": False, "night_mode": {
+         "start_time": 1320, "end_time": 450, "night_mode_type": "time", "sunrise_offset": 0, "sunset_offset": 0}}),
 ]
 RULE_RESPONSES.update({"get_device_info": {"default_states": {"type": "last_states"}},
                        "get_energy_usage": {"today_energy": 0, "electricity_charge": [0, 1, 2], "saved_electricity_charge": [0, 0, 0]},
@@ -145,7 +148,10 @@ async def test_rule_tools_level_and_device_errors(make_house, mcp, tool, args, m
     (plugs.schedule, ("12:00", True, [1, 1])), (plugs.schedule, ("12:00", True, [True])),
     (plugs.schedule, ("12:00", True, [])), (plugs.schedule, ("12:00", True, [], "2025-02-29")),
     (plugs.schedule, ("12:00", True, [], "20260101")),
-    (plugs.schedule, ("12:00", True, [1], "2026-01-01")),
+    (plugs.schedule, ("12:00", True, [1], (date.today() + timedelta(days=7)).isoformat())),
+    (plugs.schedule, ("12:00", True, [], (date.today() - timedelta(days=2)).isoformat())),
+    (plugs.schedule, ("12:00", True, [], (date.today() + timedelta(days=367)).isoformat())),
+    (plugs.schedule, ("12:00", True, [], "9999-12-31")), (plugs.away, ("01:00", "02:00", [], "0001-01-01")),
     (plugs.away, ("12:00", "12:00", [1])), (plugs.away, ("12:00", "invalid", [1])),
     (plugs.delete_rule, ("countdown", "x\nremove_all")), (plugs.delete_rule, ("unknown", "r1")),
     (plugs.enable_rule, ("countdown", True)), (plugs.enable_rule, ("away", 1)),
@@ -159,8 +165,9 @@ async def test_bad_rule_inputs_never_reach_wire(make_house, fn, args):
 
 async def test_one_off_schedule_and_paged_enable(make_house):
     reg, caller, _ = make_house(tier=2)
-    await plugs.schedule(reg, caller, "desk-lamp", "00:00", False, [], "2028-02-29")
-    assert caller.sent[-1][2] == {"week_day": 0, "mode": 0, "year": 2028, "month": 2, "day": 29,
+    when = date.today() + timedelta(days=30)
+    await plugs.schedule(reg, caller, "desk-lamp", "00:00", False, [], when.isoformat())
+    assert caller.sent[-1][2] == {"week_day": 0, "mode": 0, "year": when.year, "month": when.month, "day": when.day,
                                  "s_min": 0, "s_type": 1, "e_type": 0, "enable": True, "desired_states": {"device_on": False}}
     caller.respond("get_countdown_rules", lambda e, p: {"sum": 2, "rule_list": [
         {"id": "r0" if p["start_index"] == 0 else "r1", "enable": True, "delay": 60}]})
@@ -296,6 +303,9 @@ async def test_history_oversized_or_invalid_response_is_reported(make_house):
     caller.respond("get_power_data", "bad")
     with pytest.raises(DeviceUnavailable, match="invalid response"):
         await plugs.energy_history(reg, caller, "desk-lamp", "power", 0, 300, 5)
+    caller.respond("get_power_data", {"data": 5})
+    with pytest.raises(DeviceUnavailable, match="invalid sample list"):
+        await plugs.energy_history(reg, caller, "desk-lamp", "power", 0, 300, 5)
 
 
 @pytest.mark.parametrize("fn,args", [
@@ -356,6 +366,10 @@ async def test_hardware_scope_and_low_power_support(make_house):
     await plugs.calibration(reg, caller, "dimmer-plug", 10, 90)
     assert caller.sent[-1] == ("dimmer-plug", "set_calibrate_brightness", {"min_threshold": 10, "max_threshold": 90})
     await plugs.led_set(reg, caller, "dimmer-plug", "always")
+    assert caller.sent[-2:] == [("dimmer-plug", "get_led_info", {}), ("dimmer-plug", "set_led_info", {"led_rule": "always"})]
+    with pytest.raises(Forbidden):
+        await plugs.led_set(reg, caller, "office-1", "never")
+    assert caller.sent[-1][2] == {"led_rule": "always"}
     for device in ("desk-lamp", "office-1", "hallway-cam"):
         with pytest.raises(Forbidden):
             await plugs.hardware(reg, caller, device, "state")
@@ -454,3 +468,10 @@ async def test_identity_and_location_writes_do_not_echo_private_fields(make_hous
         "device": "desk-lamp", "changed": "set_device_info", "fields": ["name", "icon"]}
     assert await plugs.location(reg, caller, "desk-lamp", 12.3456, -45.6789) == {
         "device": "desk-lamp", "changed": "set_device_info", "fields": ["location"]}
+
+
+async def test_paging_stops_on_a_malformed_sum(make_house):
+    reg, caller, _ = make_house(tier=2, responses={"get_schedule_rules": {"sum": "many", "rule_list": [{"id": "r0"}]}})
+    with pytest.raises(RegistryError, match="not found"):
+        await plugs.enable_rule(reg, caller, "desk-lamp", "schedule", True, "r9")
+    assert caller.methods_sent() == ["get_schedule_rules"]
