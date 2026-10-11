@@ -17,12 +17,19 @@ existing sensitivity field and a reported `sensitivity_range`. Unknown or absent
 ranges are refused. Line crossing and intrusion may store sensitivity per zone.
 Other detections have no separate arming schedule in the audited app.
 
-Zones use integer image coordinates from 0 to 10000. Motion uses `x_coor`,
+Zones use integer image coordinates from 0 to 10000. The D230 motion rectangle
+confirms that scale for motion only. Motion uses `x_coor`,
 `y_coor`, `width`, `height`. Lines use `pt1_x`, `pt1_y`, `pt2_x`, `pt2_y`,
 `direction`, `sensitivity`. Intrusion uses four point pairs, `sensitivity`,
 `threshold`, `percentage`. Package uses `point_num` and three to eight point pairs.
 The tool permits up to four zones as a conservative local bound. The camera may
-impose a smaller limit. Schedules map weekday names to up to six ordered
+impose a smaller limit.
+
+UNVERIFIED: the zone read parameter, whether a zone write replaces or appends, what
+an empty list means to the camera, the point scale for lines, areas and packages,
+the 0 to 100 bounds of zone `sensitivity`, `threshold` and `percentage`, and the
+three to eight package points. UNVERIFIED: each weekday of an arming schedule is
+sent as a JSON list of `HHMM-HHMM` strings. Schedules map weekday names to up to six ordered
 `HHMM-HHMM` windows. Use an empty list to disarm a day. Unchanged days are preserved.
 
 Tested only against a canned wire. Sanitized C225, C465 and C610 camera fixtures
@@ -54,7 +61,7 @@ Line direction values are `both`, `AtoB` and `BtoA`.
 - `camera_alarm_light_switch`: Switch a bright spotlight or floodlight now with level 3 confirmation.
 - `camera_events_recent`: Poll the last alert and optional bounded SD event metadata page.
 - `camera_detect_notifications_get`: Read device-side notification choices by detection event.
-- `camera_detect_notifications_set`: Change one device-side notification switch or urgency at level 2.
+- `camera_detect_notifications_set`: Change one device-side notification switch or urgency with level 3 confirmation.
 
 Alarm setters accept only fields the model reports. Boolean switches are `enabled`,
 `sound_alarm_enabled`, `light_alarm_enabled`, `light_rbl_enabled`. `alarm_mode` is a
@@ -71,20 +78,30 @@ volume range. Other values need a reported range.
 returned capability. Its presence and shape need hardware verification. The range
 may advertise text choices or numeric bounds. Without it, volume writes are refused.
 
+UNVERIFIED: `camera_alarm_get` asks for `capability` in the same `getAlertConfig`
+read, as the audit describes. The owner's cameras were read without it. If a camera
+does not return it, every write that needs a capability flag is refused.
+UNVERIFIED: the 1 to 600 second duration bound. The owner's cameras report `"0"`.
+
 Alarm and notification event names come from the device table. Setters use the
 exact identifier from the getter and preserve other choices. Notification urgency
 is `none`, `general` or `critical` when the device reports it. These tools change
 only local switches. Push delivery still runs through the vendor cloud.
 
 Level 3 confirmation phrases name the device id, rather than its display name:
-`setAlertConfig <id>`, `setAlertEventType <id>`, `doManualAlarm <id>`,
-`setForceWhitelampState <id>` or `manualFloodlightOp <id>`. Both start and stop need
-confirmation. Light settings require the reported range or duration maximum.
+`setAlertConfig <id>`, `setAlertEventType <id>`, `setMsgPushEventList <id>`,
+`doManualAlarm <id>`, `setForceWhitelampState <id>` or `manualFloodlightOp <id>`.
+Notification choices are level 3 because they decide whether the owner is warned.
+Both start and stop need confirmation. None of the owner's cameras report the
+`manualAlarm` component, so the manual alarm is refused on them.
+UNVERIFIED: the manual alarm status parameter and body, the light read parameters,
+and the `force_wtl_state` and floodlight `action` values. Light settings require the reported range or duration maximum.
 Turning a physical bright light on or off uses level 3 as a conservative choice.
 
 `camera_events_recent` normally calls `getLastAlarmInfo`. It returns the timestamp,
 a recognized event name and numeric code when available. Empty or invalid timestamps
-are omitted. Cached python-kasa `last_alert_timestamp` and `last_alert_type` appear
+are omitted. The owner's cameras report the last alert type as text, for example
+`motion`. Only names from the known list are returned; anything else is `unknown`. Cached python-kasa `last_alert_timestamp` and `last_alert_type` appear
 separately as `cached_last`; they can lag behind the fresh result.
 
 To include SD metadata, supply both `start_time` and `end_time` as Unix seconds.
@@ -93,6 +110,8 @@ has another page; pass that value as `start_index`. Each page is sorted newest f
 locally. The device's page order is not yet verified, so a page is not a promise of
 the newest events across the whole window. Events contain timestamps and type
 codes only. No clips, file identifiers, thumbnails or media are returned.
+UNVERIFIED: the SD page request (channel 0, inclusive indices, seconds). The reply
+fields match the app.
 Unknown type codes keep their number and use `unknown`. The supported mapping
 covers audited codes 1 to 19, 23 to 28, 30, 31, 33 and 36.
 
@@ -114,25 +133,4 @@ Skipped: multi-lens channel selection, advanced global detection zones, battery
 alarm dialect, alarm schedules, separate manual-alarm settings, floodlight schedules
 and trigger filters. Those need additional model-specific shapes or fixtures.
 Other camera areas, custom audio and cloud delivery remain outside this area.
-No HTTP routes or shared Python changes are required. Before an npm release,
-the lead needs to add `src/tolpo/areas/*.py` to `package.json` files. Its current
-`src/tolpo/*.py` pattern does not include area modules.
-
-Safety mutations were run in scratch copies inside this clone. Each change was
-confirmed with `diff`. The tests failed when level checks, confirmations, hidden
-field filtering, event metadata projection, raw error redaction, unknown event
-labels, text cleaning, integer and boolean validation, component gating, capability
-flags, reported ranges, strict MCP argument types or forced refresh were weakened.
-Tests also caught forced unverified probes on ordinary reads and guessed legacy
-alarm light encodings.
-The scratch copies were removed and the production source was unchanged.
-
-The requested full suite had one existing sandbox failure in
-`test_real_ffmpeg_failure_names_no_password`. That test attempts a localhost socket
-and expects connection refusal; this sandbox reports an unreachable connection.
-It was left unchanged. The final suite also excludes that socket test, besides
-`tests/test_media.py` and `tests/test_pictures.py` as the build brief requires.
-
-Final validation: 257 area tests passed. The sandbox-compatible Python suite
-passed 391 tests with one additional socket test deselected. All 16 deliberate
-safety mutations failed their selected tests. No production mutation was retained.
+No HTTP routes.
