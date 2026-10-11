@@ -228,9 +228,21 @@ def private_logs():
         _private.reset(token)
 
 
+# Only variables the owner created for provisioning can be read. Any other
+# name, such as the account the server signs in with or an unrelated secret,
+# is refused, so an agent cannot send it to a device or a host Wi-Fi tool.
+ENV_PREFIX = "TOLPO_PROVISION_"
+ENV_NAME = re.compile(r"TOLPO_PROVISION_[A-Z0-9_]{1,64}")
+
+
+def env_name(name) -> str:
+    if not isinstance(name, str) or not ENV_NAME.fullmatch(name):
+        raise RegistryError(f"Use the name of an environment variable that starts with {ENV_PREFIX}, not a value")
+    return name
+
+
 def env_value(name: str, *, empty=False) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name):
-        raise RegistryError("Use an environment variable name, not a credential value")
+    env_name(name)
     value = os.environ.get(name)
     if value is None or (not empty and not value) or "\x00" in value:
         raise RegistryError("A required provisioning environment variable is missing or invalid")
@@ -518,8 +530,7 @@ class SoftAPPlan:
             raise RegistryError("Provide the device AP's local IPv4 address")
         interface_name(self.interface)
         for name in (self.ap_env, self.ssid_env, self.wifi_password_env, self.account_env, self.account_password_env):
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name):
-                raise RegistryError("Provisioning settings must be environment variable names")
+            env_name(name)
         if not isinstance(self.wait_seconds, int) or isinstance(self.wait_seconds, bool) or not 1 <= self.wait_seconds <= 180:
             raise RegistryError("LAN wait must be from 1 to 180 seconds")
 
