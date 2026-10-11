@@ -280,3 +280,145 @@ async def test_real_ffmpeg_failure_names_no_password(real_ffmpeg):
     assert error.reason == "refused"
     assert "Sup3r" not in f"{error} {error.detail}" and "cam:" not in error.detail
     assert "rtsp://***@127.0.0.1:1/stream2" in error.detail  # ffmpeg did echo the address, and the scrub caught it
+
+
+# ---- several frames, and pictures that arrive coded --------------------------------------------------------
+
+
+def test_several_jpegs_in_a_row_are_cut_apart_and_leftovers_refused():
+    jpeg = fakes.TINY_JPEG
+    assert snapshot.split_jpegs(jpeg * 3) == [jpeg] * 3
+    assert snapshot.split_jpegs(b"") == []
+    for broken in (jpeg + jpeg[:50], b"junk" + jpeg, jpeg[:-2]):
+        with pytest.raises(ValueError):
+            snapshot.split_jpegs(broken)
+
+
+def test_the_frames_command_asks_for_a_rate_and_a_count():
+    args = snapshot.command("ffmpeg", "rtsp://x", frames=4, fps=0.5, max_width=640)
+    assert args[args.index("-frames:v") + 1] == "4" and args[args.index("-vf") + 1] == "fps=0.5000,scale='min(640,iw)':-2"
+    assert snapshot.command("ffmpeg", "rtsp://x")[-12:] == snapshot.command("ffmpeg", "rtsp://x", frames=1)[-12:]
+
+
+@pytest.mark.anyio
+async def test_a_coded_picture_goes_through_ffmpeg_and_a_jpeg_does_not(ffmpeg):
+    picture = await snapshot.decode_still(fakes.TINY_JPEG, "jpeg", ffmpeg=ffmpeg.path)
+    assert (picture.width, picture.height) == (16, 16) and ffmpeg.calls() == []
+    picture = await snapshot.decode_still(b"\x00\x00\x00\x01\x65" + b"\x01" * 300, "hevc", ffmpeg=ffmpeg.path)
+    (args,) = ffmpeg.calls()
+    assert picture.data == fakes.TINY_JPEG and args[args.index("-f") + 1] == "hevc"
+    for data, fmt in ((b"not a jpeg", "jpeg"), (fakes.TINY_JPEG, "webp")):
+        with pytest.raises(snapshot.GrabError) as caught:
+            await snapshot.decode_still(data, fmt, ffmpeg=ffmpeg.path)
+        assert caught.value.reason == "no_picture"
+
+
+@pytest.mark.anyio
+async def test_frames_from_an_rtsp_address_come_back_as_pictures(ffmpeg):
+    pictures = await snapshot.grab_frames("rtsp://u:p@192.0.2.10:554/stream2", count=1, seconds=1, ffmpeg=ffmpeg.path)
+    assert [p.data for p in pictures] == [fakes.TINY_JPEG]
+    ffmpeg.mode("garbage")
+    with pytest.raises(snapshot.GrabError) as caught:
+        await snapshot.grab_frames("rtsp://u:p@192.0.2.10:554/stream2", count=2, seconds=1, ffmpeg=ffmpeg.path)
+    assert caught.value.reason == "no_picture"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("count, seconds", [(0, 3), (snapshot.MAX_FRAMES + 1, 3), (3, 0), (3, snapshot.MAX_SPAN + 1)])
+async def test_frames_stay_within_their_bounds(ffmpeg, count, seconds):
+    with pytest.raises(ValueError):
+        await snapshot.grab_frames("rtsp://x", count=count, seconds=seconds, ffmpeg=ffmpeg.path)
+    assert ffmpeg.calls() == []
+
+
+@pytest.mark.anyio
+async def test_real_ffmpeg_takes_frames_at_the_asked_rate(real_ffmpeg, tmp_path):
+    clip = tmp_path / "clip.ts"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10", "-t", "4",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-f", "mpegts", str(clip)],
+        check=True,
+    )
+    pictures = await snapshot.grab_frames(str(clip), count=3, seconds=2, input_args=(), timeout=20)
+    assert len(pictures) == 3 and all((p.width, p.height) == (320, 240) for p in pictures)
+
+
+# ---- the three survivors of the first mutation run, and their twins in grab_frames ---------------------------------
+
+
+class HeldFeed:
+    """A feed that lets go of the camera only when it is closed. Cancelling a read does not end it, as with a reader
+    that sits on a socket. `chunk` is what every read returns."""
+
+    def __init__(self, chunk: bytes):
+        self.chunk, self.closed = chunk, False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        await asyncio.sleep(0.01)
+        return self.chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+NO_VIDEO = b"\x47\x1f\xff\x10" + b"\xff" * 184  # a padding packet: a transport stream that never names a video track
+
+
+def coded_stream(kind: int) -> bytes:
+    from .fake_camera import fake_ts
+
+    return fake_ts(b"\x00\x00\x00\x01\x65" + b"\x11" * 3000, kind=kind)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("take", ["grab", "frames"])
+async def test_a_stream_that_never_shows_video_lets_the_camera_go_on_timeout(ffmpeg, take):
+    feed = HeldFeed(NO_VIDEO)
+    with pytest.raises(snapshot.GrabError) as caught:
+        if take == "grab":
+            await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=1.0)
+        else:
+            await snapshot.grab_frames(feed=feed, count=2, seconds=1, ffmpeg=ffmpeg.path, timeout=1.0)
+    assert caught.value.reason == "timeout" and feed.closed and ffmpeg.calls() == []
+
+
+@pytest.mark.anyio
+async def test_giving_up_while_waiting_for_video_lets_the_camera_go(ffmpeg):
+    feed = HeldFeed(NO_VIDEO)
+    task = asyncio.create_task(snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=60))
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert feed.closed
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("take", ["grab", "frames"])
+async def test_a_missing_ffmpeg_lets_the_camera_go_after_the_video_showed(tmp_path, take):
+    feed = HeldFeed(coded_stream(0x1B))
+    with pytest.raises(snapshot.GrabError) as caught:
+        if take == "grab":
+            await snapshot.grab(feed=feed, ffmpeg=str(tmp_path / "nope"))
+        else:
+            await snapshot.grab_frames(feed=feed, count=2, seconds=1, ffmpeg=str(tmp_path / "nope"))
+    assert caught.value.reason == "missing" and feed.closed
+
+
+@pytest.mark.anyio
+async def test_frames_from_a_camera_that_sends_hevc_are_read_as_hevc(ffmpeg):
+    feed = HeldFeed(coded_stream(0x24))
+    pictures = await snapshot.grab_frames(feed=feed, count=1, seconds=1, ffmpeg=ffmpeg.path)
+    (args,) = ffmpeg.calls()
+    assert args[args.index("-f") + 1] == "hevc" and len(pictures) == 1 and feed.closed
+
+
+@pytest.mark.anyio
+async def test_frames_from_an_ffmpeg_that_fails_after_printing_a_picture_are_a_failure(ffmpeg):
+    ffmpeg.mode("failafter")  # a whole JPEG on stdout, then an error and a nonzero exit
+    with pytest.raises(snapshot.GrabError) as caught:
+        await snapshot.grab_frames("rtsp://cam:pw@192.0.2.10:554/stream2", count=1, seconds=1, ffmpeg=ffmpeg.path)
+    assert caught.value.reason == "failed" and "Invalid data" in caught.value.detail

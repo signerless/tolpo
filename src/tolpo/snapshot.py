@@ -55,15 +55,32 @@ def rtsp_url(host: str, username: str, password: str, quality: str) -> str:
     return f"rtsp://{quote(username, safe='')}:{quote(password, safe='')}@{where}:{RTSP_PORT}/{STREAMS[quality]}"
 
 
-def command(ffmpeg: str, source: str, input_args: Sequence[str] = RTSP_INPUT, max_width: int = MAX_WIDTH) -> list[str]:
-    """No shell is involved and nothing in here comes from an agent: the source is built from a discovered address."""
+def command(
+    ffmpeg: str, source: str, input_args: Sequence[str] = RTSP_INPUT, max_width: int = MAX_WIDTH, *, frames: int = 1, fps: float | None = None
+) -> list[str]:
+    """No shell is involved and nothing in here comes from an agent: the source is built from a discovered address,
+    and `frames` and `fps` are numbers checked by the caller. With `fps`, frames are taken at that rate."""
+    scale = f"scale='min({max_width},iw)':-2"  # never enlarge; -2 keeps the height even
     return [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
         *input_args, "-i", source,
-        "-an", "-frames:v", "1",
-        "-vf", f"scale='min({max_width},iw)':-2",  # never enlarge; -2 keeps the height even
+        "-an", "-frames:v", str(int(frames)),
+        "-vf", f"fps={fps:.4f},{scale}" if fps else scale,
         "-q:v", "5", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
     ]
+
+
+def split_jpegs(data: bytes) -> list[bytes]:
+    """Cut ffmpeg's stream of JPEG pictures into whole pictures. Inside a JPEG every 0xFF in the picture data is
+    followed by 0x00, so an end-of-image marker is never part of the picture itself. Raises ValueError on leftovers."""
+    out, rest = [], data
+    while rest:
+        end = rest.find(b"\xff\xd9")
+        if not rest.startswith(b"\xff\xd8") or end < 0:
+            raise ValueError("not a sequence of whole JPEG pictures")
+        out.append(rest[: end + 2])
+        rest = rest[end + 2 :]
+    return out
 
 
 def jpeg_size(data: bytes) -> tuple[int, int] | None:
@@ -154,7 +171,7 @@ async def _release(proc: asyncio.subprocess.Process, pumping: asyncio.Task | Non
     return result[0] if isinstance(result[0], GrabError) else None
 
 
-async def _run(
+async def _ffmpeg(
     source: str,
     feed: AsyncIterator[bytes] | None,
     input_args: Sequence[str],
@@ -163,13 +180,16 @@ async def _run(
     max_width: int,
     timeout: float,
     secrets: Sequence[str],
-) -> Picture:
-    """Start ffmpeg on `source`, or on `feed` through its stdin, and return the first frame it decodes."""
+    frames: int = 1,
+    fps: float | None = None,
+) -> tuple[bytes, int, str, GrabError | None]:
+    """Run ffmpeg on `source`, or on `feed` through its stdin. Returns what it wrote, its exit code, its scrubbed
+    complaints and the feed's own complaint, if any."""
     if feed is not None:
         source = "pipe:0"
     try:
         proc = await asyncio.create_subprocess_exec(
-            *command(ffmpeg, source, input_args, max_width),
+            *command(ffmpeg, source, input_args, max_width, frames=frames, fps=fps),
             stdin=asyncio.subprocess.PIPE if feed is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -189,16 +209,35 @@ async def _run(
         await _release(proc, pumping)
         raise
     failure = await _release(proc, pumping)
+    return out, proc.returncode, scrub(err.decode("utf-8", "replace"), secrets).strip()[-1500:], failure
 
-    detail = scrub(err.decode("utf-8", "replace"), secrets).strip()[-1500:]
-    size = jpeg_size(out) if proc.returncode == 0 else None
+
+def _no_picture(returncode: int, detail: str, failure: GrabError | None) -> GrabError:
+    if failure is not None:  # the camera said why; that beats what ffmpeg made of an empty input
+        return failure
+    if returncode != 0:
+        reason, message = _explain(detail)
+        return GrabError(reason, message, detail)
+    return GrabError("no_picture", "the camera connected but no usable picture came out of the stream", detail)
+
+
+async def _run(
+    source: str,
+    feed: AsyncIterator[bytes] | None,
+    input_args: Sequence[str],
+    *,
+    ffmpeg: str,
+    max_width: int,
+    timeout: float,
+    secrets: Sequence[str],
+) -> Picture:
+    """Start ffmpeg on `source`, or on `feed` through its stdin, and return the first frame it decodes."""
+    out, returncode, detail, failure = await _ffmpeg(
+        source, feed, input_args, ffmpeg=ffmpeg, max_width=max_width, timeout=timeout, secrets=secrets
+    )
+    size = jpeg_size(out) if returncode == 0 else None
     if size is None or len(out) > MAX_BYTES:
-        if failure is not None:  # the camera said why; that beats what ffmpeg made of an empty input
-            raise failure
-        if proc.returncode != 0:
-            reason, message = _explain(detail)
-            raise GrabError(reason, message, detail)
-        raise GrabError("no_picture", "the camera connected but no usable picture came out of the stream", detail)
+        raise _no_picture(returncode, detail, failure)
     return Picture(out, size[0], size[1], time.time())
 
 
@@ -258,3 +297,69 @@ async def grab(
         return await _run("", raw, (*RAW_VIDEO_INPUT, "-f", fmt), ffmpeg=ffmpeg, max_width=max_width, timeout=left, secrets=secrets)
     finally:
         await feed.aclose()  # also when ffmpeg never started
+
+
+async def decode_still(data: bytes, fmt: str, *, ffmpeg: str = "ffmpeg", max_width: int = MAX_WIDTH, timeout: float = GRAB_TIMEOUT) -> Picture:
+    """A JPEG from one coded picture (raw H.264 or H.265, as a camera sends for some thumbnails), or the picture
+    itself when it is already a JPEG."""
+    if fmt == "jpeg":
+        size = jpeg_size(data)
+        if size is None or len(data) > MAX_BYTES:
+            raise GrabError("no_picture", "the camera sent a picture that is not a whole JPEG")
+        return Picture(data, size[0], size[1], time.time())
+    if fmt not in ("h264", "hevc"):
+        raise GrabError("no_picture", "the camera sent a picture in a format tolpo does not read")
+
+    async def once() -> AsyncIterator[bytes]:
+        yield data
+
+    return await _run("", once(), (*RAW_VIDEO_INPUT, "-f", fmt), ffmpeg=ffmpeg, max_width=max_width, timeout=timeout, secrets=())
+
+
+MAX_FRAMES = 6
+MAX_SPAN = 10.0  # seconds
+
+
+async def grab_frames(
+    source: str | None = None,
+    *,
+    feed: AsyncIterator[bytes] | None = None,
+    count: int,
+    seconds: float,
+    ffmpeg: str = "ffmpeg",
+    input_args: Sequence[str] = RTSP_INPUT,
+    max_width: int = MAX_WIDTH,
+    timeout: float = GRAB_TIMEOUT,
+    secrets: Sequence[str] = (),
+) -> list[Picture]:
+    """`count` frames spread over about `seconds` of live video, from `source` or `feed` like `grab`. At most
+    MAX_FRAMES frames over MAX_SPAN seconds, and MAX_BYTES for all of them together."""
+    if not 1 <= count <= MAX_FRAMES or not 0 < seconds <= MAX_SPAN:
+        if feed is not None:
+            await feed.aclose()
+        raise ValueError(f"frames must be 1 to {MAX_FRAMES} over at most {MAX_SPAN:.0f} seconds")
+    fps = count / seconds
+    timeout = max(timeout, seconds + 10.0)
+    started = time.monotonic()
+    if feed is None:
+        out, returncode, detail, failure = await _ffmpeg(
+            source or "", None, input_args, ffmpeg=ffmpeg, max_width=max_width, timeout=timeout, secrets=secrets, frames=count, fps=fps
+        )
+    else:
+        fmt, raw = await elementary_video(feed, timeout)
+        try:
+            left = max(1.0, timeout - (time.monotonic() - started))
+            out, returncode, detail, failure = await _ffmpeg(
+                "", raw, (*RAW_VIDEO_INPUT, "-f", fmt), ffmpeg=ffmpeg, max_width=max_width, timeout=left, secrets=secrets, frames=count, fps=fps
+            )
+        finally:
+            await feed.aclose()
+    try:
+        pictures = split_jpegs(out) if returncode == 0 and len(out) <= MAX_BYTES else []
+    except ValueError:
+        pictures = []
+    sizes = [jpeg_size(p) for p in pictures]
+    if not pictures or None in sizes:
+        raise _no_picture(returncode, detail, failure)
+    now = time.time()
+    return [Picture(p, w, h, now) for p, (w, h) in zip(pictures, sizes)]
