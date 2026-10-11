@@ -657,10 +657,23 @@ def test_client_ids_stay_where_a_real_camera_accepts_them():
 
 
 @pytest.mark.anyio
-async def test_opening_a_playback_stops_at_the_first_video_and_lets_the_camera_go():
+async def test_opening_a_playback_plays_until_enough_video_arrived_and_lets_the_camera_go(monkeypatch):
+    monkeypatch.setattr(media, "OPEN_BYTES", 188 * 3)
     async with FakeCamera(PASSWORD, [ts(1, i) for i in range(1, 30)]) as camera:
+        started = time.monotonic()
         await media.open_playback("127.0.0.1", PASSWORD, 1760000000, port=camera.port)
+        took = time.monotonic() - started
         await asyncio.wait_for(camera.disconnected.wait(), 5)
     (request,) = camera.requests
     assert request["params"]["playback"]["start_time"] == "1760000000" and request["params"]["playback"]["end_time"] == "1760000001"
+    assert camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]
+    assert took < 3  # it stopped at the amount of video, it did not wait for the time limit
+
+
+@pytest.mark.anyio
+async def test_opening_a_playback_of_a_short_recording_gives_up_waiting_after_the_time_limit(monkeypatch):
+    monkeypatch.setattr(media, "OPEN_SECONDS", 0.4)
+    async with FakeCamera(PASSWORD, [ts(1, 1)]) as camera:  # far less video than a download needs to be primed
+        await media.open_playback("127.0.0.1", PASSWORD, 1760000000, port=camera.port)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
     assert camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]

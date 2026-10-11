@@ -477,13 +477,28 @@ def client_id() -> int:
     return secrets.randbelow(200) + 1
 
 
+OPEN_BYTES = 1024 * 1024  # how much video a playback must deliver before a download follows
+OPEN_SECONDS = 6.0
+
+
 async def open_playback(host: str, password: str, start: int, *, port: int = MEDIA_PORT, psk_port: int = PSK_PORT) -> None:
-    """Start a playback at `start` and stop at the first video. Checked on a C465: it answers a download with a response and
-    no video until a playback has been opened, and after one playback the downloads work."""
+    """Play a recording for a moment. Checked on a C465: it answers a download with a response and no video until a
+    playback has been opened, and playing only the first part was not enough, while about a megabyte (four seconds of
+    video) was: after that the downloads work for a while."""
+    got = 0
     feed = playback_chunks(host, password, start, start + 1, port=port, psk_port=psk_port)
+
+    async def play() -> None:
+        nonlocal got
+        async for chunk in feed:
+            got += len(chunk)
+            if got >= OPEN_BYTES:
+                return
+
     try:
-        async for _ in feed:
-            break
+        await asyncio.wait_for(play(), OPEN_SECONDS)
+    except TimeoutError:
+        pass  # a short recording may hold less than that; the download decides whether it worked
     finally:
         await feed.aclose()
 

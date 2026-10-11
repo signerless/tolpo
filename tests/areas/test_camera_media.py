@@ -66,6 +66,12 @@ def no_clip_dir(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def quick_playback_before_a_download(monkeypatch):
+    """The fake camera sends little video, so the wait for a megabyte would run to its time limit in every clip test."""
+    monkeypatch.setattr(media, "OPEN_SECONDS", 0.2)
+
+
+@pytest.fixture(autouse=True)
 def nowhere(monkeypatch):
     """Unless a test points them at a fake camera, the video channels lead to a closed port on this machine, so even a
     broken check can never reach the address of the fake house's camera."""

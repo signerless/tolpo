@@ -72,7 +72,10 @@ The memory card's password field (cards locked with a password report one) is ne
   of 50 parts (`X-Data-Window-Size`) and acknowledge every 25th part number with a `stream_sequence` notification carrying
   `X-Data-Received`, as the app does. Checked on a C465: a playback streams faster than real time and ignores its end time,
   so the reader stops when it has what it needs; a download of any window that is not a whole recording gets only a
-  response and no video; neither needed the acknowledgements within 20 seconds of video.
+  response and no video; neither needed the acknowledgements within 20 seconds of video. The client id must be small: ids
+  up to 255 get video and 65535 or more do not, so tolpo uses 1 to 200. A download gets only a response until a playback
+  has been opened, so tolpo opens one (it stops at the first video) before it asks for the recording; after that, downloads
+  of any recording work.
 - Event pictures (`download` with `media_type` 2 and a `file_id`) are built but were never tried: the owner's cameras
   list events without file ids.
 
