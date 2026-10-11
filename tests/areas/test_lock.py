@@ -361,9 +361,8 @@ async def test_no_native_lock_method_is_declared_so_the_caller_refuses_it(method
     assert caller.sent == []
 
 
-@pytest.mark.xfail(strict=True, reason="common.py declares set_device_info for locks; requires a shared-file fix")
 def test_shared_catalog_must_refuse_lock_writes(make_house):
-    # Review finding: common.py includes locks in SMART_KINDS. The lock area cannot edit that shared file.
+    # Review finding, fixed in the shared declarations: common.py once included locks in SMART_KINDS.
     _, caller, _ = make_house(tier=2)
     entry = SimpleNamespace(kind="lock", slug="fake-lock")
     with pytest.raises(Forbidden):
