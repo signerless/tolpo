@@ -132,6 +132,9 @@ async def rename_device(registry, caller, device, name):
 
 
 async def set_metadata(registry, caller, device, icon=None, latitude=None, longitude=None):
+    # UNVERIFIED: python-kasa writes neither field. The audit names `avatar` as a set_device_info field, and the real
+    # get_device_info answers carry `avatar`, `latitude` and `longitude`. That set_device_info accepts the coordinates
+    # as integer degrees times 10000 (the scale python-kasa reads them with) is not confirmed on a device.
     entry = registry.resolve_one(device)
     _smart(entry)
     params, changed = {}, {}

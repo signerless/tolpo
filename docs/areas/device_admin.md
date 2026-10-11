@@ -10,7 +10,7 @@ The tool reports a start request, not a completed upgrade. Read progress separat
 reboot before refresh succeeds; that is reported without retrying the write.
 
 - `device_rename`: Rename a SMART device, camera or camera protocol hub. The current tolpo slug stays usable.
-- `device_set_metadata`: Set a SMART built-in avatar identifier or location coordinates. Coordinates are not returned.
+- `device_set_metadata`: Set a SMART built-in avatar identifier or location coordinates. Coordinates are not returned. UNVERIFIED write shape.
 - `device_get_clock`: Read the SMART or camera protocol clock and time zone.
 - `device_set_clock`: Set SMART time and an IANA time zone. Omit the timestamp to use now. Devices using the camera protocol support only the zone.
 - `device_get_led`: Read SMART cached LED settings or the camera protocol LED on/off state.
@@ -37,8 +37,10 @@ reboot before refresh succeeds; that is reported without retrying the write.
 SMART firmware requires python-kasa's `Firmware` module. Automatic updates require component
 version 2 or later. Module checks reject unsupported devices before sending methods. Legacy IOT
 request envelopes are not implemented here. Icons use the app's `avatar` field. Location uses integer
-degrees multiplied by 10000. It affects sunrise and sunset behavior. The library has no location
-setter; the app request fields and the library's location reader establish this shape.
+degrees multiplied by 10000. It affects sunrise and sunset behavior.
+UNVERIFIED: python-kasa writes neither the icon nor the location. The audit names `avatar` as a
+`set_device_info` field, and python-kasa reads the coordinates with the 10000 scale. That the device
+accepts `latitude` and `longitude` in `set_device_info` is a guess until it is checked on a device.
 
 SMART LED reads use cached module data. python-kasa rate-limits `get_led_info` because frequent
 queries can crash P100 devices. Custom schedules preserve the existing flat or nested `night_mode`
