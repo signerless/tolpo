@@ -11,6 +11,7 @@ from .config import private_open
 from .models import NetworkError
 
 MAX_STORE_BYTES = 8 * 1024 * 1024
+MAX_AUDIT_BYTES = 8 * 1024 * 1024
 
 
 def digest(value) -> str:
@@ -104,6 +105,10 @@ class Audit:
         if self.path is None:
             raise NetworkError("Firewall audit log is unavailable")
         fd = private_open(self.path, os.O_RDWR | os.O_APPEND | os.O_CREAT)
+        # A full log refuses new plans. Records that finish or revert an existing change are always written.
+        if event.get("event") == "plan" and os.fstat(fd).st_size > MAX_AUDIT_BYTES:
+            os.close(fd)
+            raise NetworkError("Firewall audit log is full; the owner must archive it before new plans")
         try:
             with os.fdopen(fd, "r+") as stream:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

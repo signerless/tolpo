@@ -959,3 +959,17 @@ async def test_allow_list_refuses_ranges_wildcards_and_names(make_house, tmp_pat
     with pytest.raises(NetworkError):
         await service.plan("allow_only", "desk-lamp", hosts, "test")
     assert kernel.calls == []
+
+
+@pytest.mark.anyio
+async def test_full_audit_log_refuses_new_plans_but_still_records_rollback(make_house, tmp_path, monkeypatch):
+    from tolpo.network import storage
+    service, kernel, _, _ = writable(make_house, tmp_path)
+    plan = await service.plan("block_internet", "desk-lamp", [], "test")
+    monkeypatch.setattr(storage, "MAX_AUDIT_BYTES", 10)
+    with pytest.raises(NetworkError, match="audit log is full"):
+        await service.plan("allow_only", "desk-lamp", ["203.0.113.50"], "test")
+    await apply_plan(service, plan)
+    await service.rollback(plan["plan_id"], "network_rollback " + plan["plan_id"])
+    events = [json.loads(line)["event"] for line in (tmp_path / "audit").read_text().splitlines()]
+    assert events[-1] == "rollback" and kernel.state["nftables"] == []

@@ -138,6 +138,8 @@ Each record hashes the previous record. A corrupt chain refuses writes. The MCP 
 unavailable because the shared context does not expose it. Cleanup failures remain visible through
 `network_providers`. Native expiry remains the final safety net when command access fails.
 The hash chain detects edited records. Deletion of a valid tail needs an external anchor to detect.
+The audit file has no automatic rotation, because rotation would break the chain. Above 8 MiB it refuses new
+plans until the owner archives it. Records that finish or revert an existing change are still written.
 Break-glass cleanup verifies the table name, family and ownership comment before deleting it. By hand, inspect
 `nft list tables` and delete only an `inet tolpo_<id>` table whose comment matches `tolpo:<id>`.
 The exact command is `nft delete table inet tolpo_<id>`. Do not flush the ruleset.
