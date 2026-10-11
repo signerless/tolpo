@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -47,6 +48,8 @@ METHODS = [
 
 DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 Day = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+# UNVERIFIED: the meaning of the codes comes from the app's code (timing 1, motion 2, AOV 3). The owner's cameras show
+# "2" and "3" in their plans, but which behavior each code gives was not checked on them.
 MODES = {"1": "continuous", "2": "events", "3": "aov"}  # aov: always-on video at a low frame rate (battery models)
 MODE_CODES = {name: code for code, name in MODES.items()}
 MAX_WINDOWS = 10  # per day. UNVERIFIED: the camera's own limit is not known; the app shows a handful at most
@@ -57,7 +60,10 @@ MAX_EVENTS = 100
 CLIP_MAX_SECONDS = 300
 CLIP_MAX_BYTES = 512 * 1024 * 1024
 CLIP_DIR_ENV = "TOLPO_CLIP_DIR"
-FILE_ID = re.compile(r"^[\w.:-]{1,128}$")
+FILE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")  # used with fullmatch: ASCII only, no trailing newline
+SECONDS = re.compile(r"[0-9]{1,12}")
+EARLIEST = 946684800  # 2000-01-01: no Tapo camera recorded anything before that
+LATEST = 4102444800  # 2100-01-01
 
 # UNVERIFIED: the app numbers events like this in its cloud enum. That the camera uses the same numbers is assumed.
 EVENT_TYPES = {
@@ -98,10 +104,11 @@ def _first_list(section: Any, *keys: str) -> tuple[list[dict[str, Any]], dict[st
 
 
 def _int(value: Any) -> int | None:
-    try:
-        return int(str(value).strip().rstrip("B"))
-    except (TypeError, ValueError):
+    """A whole number from the camera ("118900344128B", "1758640056", 3), or None. ASCII digits only."""
+    if isinstance(value, bool):
         return None
+    text = str(value).strip().removesuffix("B")
+    return int(text) if re.fullmatch(r"-?[0-9]{1,20}", text) else None
 
 
 def _gb(value: Any) -> float | None:
@@ -110,7 +117,9 @@ def _gb(value: Any) -> float | None:
 
 
 def _local(ts: int | None) -> str | None:
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts and ts > 0 else None
+    if not ts or not 0 < ts < LATEST:  # a camera's number far outside any real time is left out, not a crash
+        return None
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _zone() -> str:
@@ -121,14 +130,19 @@ def _zone() -> str:
 def _when(text: str | int, name: str) -> int:
     """Seconds since the epoch from "YYYY-MM-DD HH:MM[:SS]" (local time) or from a number of seconds."""
     raw = str(text).strip()
-    if raw.isdigit():
-        return int(raw)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
-        try:
-            return int(datetime.strptime(raw, fmt).timestamp())
-        except ValueError:
-            continue
-    raise BadRequest(f"{name} must look like 2026-10-11 08:30:00 (local time) or be seconds since 1970")
+    value = None
+    if SECONDS.fullmatch(raw):
+        value = int(raw)
+    else:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+            try:
+                value = int(datetime.strptime(raw, fmt).timestamp())
+                break
+            except (ValueError, OverflowError, OSError):
+                continue
+    if value is None or not EARLIEST <= value < LATEST:
+        raise BadRequest(f"{name} must look like 2026-10-11 08:30:00 (local time) or be seconds since 1970, from the year 2000 on")
+    return value
 
 
 def _day(text: str | None, name: str, default: date) -> date:
@@ -187,6 +201,7 @@ async def storage_status(registry: Registry, caller: Any, entry: Entry) -> dict[
 
 
 async def set_loop(registry: Registry, caller: Any, entry: Entry, on: bool) -> dict[str, Any]:
+    # UNVERIFIED: the request shape, from the app's code (module harddisk_manage, section harddisk, field loop).
     await caller.call(entry, "setCircularRecordingConfig", {"harddisk_manage": {"harddisk": {"loop": "on" if on else "off"}}})
     await _refresh(registry, entry)
     out: dict[str, Any] = {"camera": entry.slug, "loop_recording": on}
@@ -196,6 +211,7 @@ async def set_loop(registry: Registry, caller: Any, entry: Entry, on: bool) -> d
 
 
 async def format_card(registry: Registry, caller: Any, entry: Entry, confirm: str | None) -> dict[str, Any]:
+    # UNVERIFIED: the request shape, from the app's code (module harddisk_manage, section format_hd).
     await caller.call(entry, "formatSdCard", {"harddisk_manage": {"format_hd": "1"}}, confirm=confirm)
     await _refresh(registry, entry)
     return {"camera": entry.slug, "formatting": True, "note": "Every recording on the card is being erased. Follow it with camera_storage_status."}
@@ -288,6 +304,7 @@ async def set_record_plan(
         raise BadRequest("say what to change: windows, clear_days or enabled")
     current = await caller.call(entry, "getRecordPlan", {"record_plan": {"name": ["chn1_channel"]}})
     plan = build_plan(current, windows, clear_days, enabled)
+    # UNVERIFIED: the write shape mirrors the plan getRecordPlan returns on the owner's cameras; no write was tried on one.
     await caller.call(entry, "setRecordPlan", {"record_plan": {"chn1_channel": plan}})
     await _refresh(registry, entry)
     before = plan_view(current)
@@ -319,7 +336,7 @@ async def recording_days(registry: Registry, caller: Any, entry: Entry, start: s
 
 def _segment(item: dict[str, Any]) -> dict[str, Any] | None:
     start, end = _int(item.get("startTime", item.get("start_time"))), _int(item.get("endTime", item.get("end_time")))
-    if not start:
+    if not start or not 0 < start < LATEST:
         return None
     kind = str(item.get("video_type", item.get("vedio_type", "")))
     kind = kind if kind.isdigit() and len(kind) < 4 else ""  # a number, or nothing: never free text from the device
@@ -355,14 +372,14 @@ async def recordings_of_day(registry: Registry, caller: Any, entry: Entry, day: 
 
 def _event(item: dict[str, Any]) -> dict[str, Any] | None:
     start = _int(item.get("start_time", item.get("startTime")))
-    if not start:
+    if not start or not 0 < start < LATEST:
         return None
     code = _int(item.get("alarm_type"))
     file_id = item.get("file_id")
     return _compact({
         "time": _local(start), "start_ts": start, "end": _local(_int(item.get("end_time"))),
         "type": EVENT_TYPES.get(code, f"type {code}") if code is not None else None,
-        "file_id": clean(str(file_id), 128) if file_id is not None and FILE_ID.match(str(file_id)) else None,
+        "file_id": str(file_id) if file_id is not None and FILE_ID.fullmatch(str(file_id)) else None,
     })
 
 
@@ -398,7 +415,7 @@ async def _video_allowed(registry: Registry, entry: Entry) -> None:
 async def thumbnail(registry: Registry, entry: Entry, start_time: str | None, file_id: str | None) -> snapshot.Picture:
     if (start_time is None) == (file_id is None):
         raise BadRequest("give either start_time (a recording's start) or file_id (an event from camera_recordings_events)")
-    if file_id is not None and not FILE_ID.match(file_id):
+    if file_id is not None and not FILE_ID.fullmatch(file_id):
         raise BadRequest("file_id is not one the camera gave out")
     # UNVERIFIED: both request shapes. The app also sends the camera's MAC address here; tolpo leaves it out.
     if file_id is not None:
@@ -436,9 +453,42 @@ def clip_folder(registry: Registry) -> Path:
     if not folder:
         raise NotEnabled("recordings cannot be copied from cameras: the owner has not chosen a folder for them")
     path = Path(folder).expanduser()
+    if not path.is_absolute():
+        raise NotEnabled("recordings cannot be copied: the folder the owner chose is not a full path")
     if not path.is_dir():
         raise NotEnabled("recordings cannot be copied: the folder the owner chose does not exist")
     return path
+
+
+NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_partial(folder: Path, base: str) -> tuple[Path, Any]:
+    """A new file only the owner can read, in `folder` and nowhere else. O_EXCL never opens a file or a symlink that
+    is already there, so nothing is overwritten and no link is followed."""
+    partial = folder / f".{base}.{secrets.token_hex(6)}.part"
+    fd = os.open(partial, NEW_FILE, 0o600)
+    return partial, os.fdopen(fd, "wb")
+
+
+def _publish(partial: Path, folder: Path, base: str) -> Path:
+    """Give the finished copy its name without replacing any file: the first free `<base>.ts`, `<base>-2.ts`, ..."""
+    for n in range(1, 1000):
+        target = folder / (f"{base}.ts" if n == 1 else f"{base}-{n}.ts")
+        try:
+            os.link(partial, target)  # fails when the name exists, also as a dangling symlink
+        except FileExistsError:
+            continue
+        except OSError:  # a file system without hard links (FAT): claim the name first, then move onto our own claim
+            try:
+                os.close(os.open(target, NEW_FILE, 0o600))
+            except FileExistsError:
+                continue
+            os.replace(partial, target)
+            return target
+        partial.unlink()
+        return target
+    raise DeviceUnavailable("the clip folder already holds too many copies of that recording")
 
 
 async def download_clip(registry: Registry, entry: Entry, start_time: str, seconds: int) -> dict[str, Any]:
@@ -449,23 +499,22 @@ async def download_clip(registry: Registry, entry: Entry, start_time: str, secon
         raise BadRequest("the clip must be in the past")
     folder = clip_folder(registry)
     await _video_allowed(registry, entry)
-    stamp = datetime.fromtimestamp(start).strftime("%Y%m%d-%H%M%S")
-    target = folder / f"{entry.slug}-{stamp}-{seconds}s.ts"
-    n = 1
-    while target.exists():
-        n += 1
-        target = folder / f"{entry.slug}-{stamp}-{seconds}s-{n}.ts"
-    partial = target.with_suffix(".ts.part")
+    # The name holds only the slug (letters, digits and dashes) and numbers: nothing the camera or the agent wrote.
+    base = f"{entry.slug}-{datetime.fromtimestamp(start).strftime('%Y%m%d-%H%M%S')}-{seconds}s"
     host, port = media_address(entry)
     # UNVERIFIED: the request shape. media_type 0 is video; times are seconds as text, like the app sends them.
     request = {"download": {"media_type": 0, "start_time": str(start), "end_time": str(start + seconds)}}
     async with entry.picture_lock:
+        partial, sink = _open_partial(folder, base)  # only a file this call created is ever removed below
         try:
-            with open(partial, "xb") as sink:
+            with sink:
                 result = await media.download(
                     host, registry.cfg.password, request, sink.write, port=port,
                     max_bytes=CLIP_MAX_BYTES, max_seconds=min(600.0, 30.0 + seconds * 3),
                 )
+            if not result.bytes:
+                raise DeviceUnavailable(f"{entry.slug} sent no video for that time; check camera_recordings_day for what exists")
+            target = _publish(partial, folder, base)
         except GrabError as exc:
             partial.unlink(missing_ok=True)
             if exc.reason == "auth":
@@ -475,10 +524,6 @@ async def download_clip(registry: Registry, entry: Entry, start_time: str, secon
         except BaseException:
             partial.unlink(missing_ok=True)
             raise
-    if not result.bytes:
-        partial.unlink(missing_ok=True)
-        raise DeviceUnavailable(f"{entry.slug} sent no video for that time; check camera_recordings_day for what exists")
-    partial.rename(target)
     log.info("recording from %s copied to %s: %d bytes", entry.slug, target, result.bytes)
     return _compact({
         "camera": entry.slug, "file": str(target), "bytes": result.bytes, "complete": result.complete,
@@ -537,14 +582,14 @@ def tools(ctx):
     @ctx.tool(title="Change camera record plan", tier=Tier.SETTING)
     async def camera_recordings_set_plan(
         camera: CameraRef,
-        windows: Annotated[list[Window], Field(description="New time windows. Each named day gets exactly these windows; days not named keep theirs")] = [],
-        clear_days: Annotated[list[Day], Field(description="Days that get no window at all (no recording on those days)")] = [],
+        windows: Annotated[list[Window] | None, Field(description="New time windows. Each named day gets exactly these windows; days not named keep theirs")] = None,
+        clear_days: Annotated[list[Day] | None, Field(description="Days that get no window at all (no recording on those days)")] = None,
         enabled: Annotated[bool | None, Field(description="Turn recording to the card on or off as a whole; leave out to keep it")] = None,
     ) -> dict[str, Any]:
         """Change when a camera records to its memory card. Days you do not name keep their current windows. A plan
         with no windows records nothing, so read camera_recordings_plan first and change only what the owner asked."""
         with ctx.translated():
-            return await set_record_plan(reg, ctx.caller, await resolve(camera), windows, list(clear_days), enabled)
+            return await set_record_plan(reg, ctx.caller, await resolve(camera), windows or [], list(clear_days or []), enabled)
 
     @ctx.tool(title="Days with recordings", tier=Tier.READ)
     async def camera_recordings_days(
@@ -628,8 +673,8 @@ def tools(ctx):
 
 
 class PlanChange(BaseModel):
-    windows: list[Window] = []
-    clear_days: list[Day] = []
+    windows: list[Window] = Field(default_factory=list)
+    clear_days: list[Day] = Field(default_factory=list)
     enabled: bool | None = None
 
 
