@@ -4,6 +4,12 @@ These tools use the existing local session and the owner's account. All executio
 Sanitized H200 siren and LED response bodies and empty T110/T300/T310 trigger logs are covered by the fakes.
 Nonempty events follow the audit and python-kasa. No valve fixtures were available. Real-device verification is still required.
 
+The owner's H200 with T110, T300 and T310 sensors can check these tools: `hub_alarm_config`, `hub_alarm_set`,
+`hub_siren`, `hub_led`, `hub_led_set`, `hub_diagnostics_read`, `hub_events`, `hub_child_rename`, `sensor_settings`,
+`sensor_alarm_set` and `sensor_siren` (T300), `sensor_comfort_temperature`, `sensor_comfort_humidity`, `sensor_mode`
+and `hub_child_history` (T310), and `sensor_led`. The H100 paths, `sensor_sensitivity` (T100/T150) and every
+`valve_*` tool need hardware the owner does not have.
+
 - `hub_events`: Read recent child trigger logs with UTC time, optionally filtered by child and Unix timestamp.
 - `hub_alarm_config`: Read siren settings, alarm state and available tones, including H100 chime tones.
 - `hub_alarm_set`: Set a tone, volume or duration at level 2 without playing it. It refuses to mute the siren.
@@ -36,26 +42,39 @@ Nonempty events follow the audit and python-kasa. No valve fixtures were availab
 
 `recent_events(registry, caller, hub, device=None, limit=50, after=None)` is the plain async polling function.
 It returns frozen `HubEvent` values. It reads live logs instead of python-kasa's hourly cache.
-Each poll reads up to 100 recent records per supported child and returns at most 100 events, newest first.
+Each poll asks every sensor and switch child of that hub for 100 recent records and returns at most 100 events, newest first.
+UNVERIFIED: the owner's sensors accepted `page_size` 10 on empty logs. Whether firmware honors 100 is unknown.
+Children of another hub are never read through this hub.
 It does not paginate older history. Overlap polls and dedupe by `(device, id, timestamp)`.
 The `after` filter is exclusive. A poll fails with the child's name when that child cannot be read.
 Dial events keep the numeric `rotate_deg` value. Other arbitrary event parameters are omitted.
 Check `get_trigger_logs` on T110, T100, T300 and S200B/S200D children behind both H100 and H200.
 
 H100 uses `get_alarm_configure`, `get_support_alarm_type_list`, `set_alarm_configure`, `play_alarm` and `stop_alarm`.
-Its volume choices are mute, low, normal and high. Duration is 1 to 600 seconds.
+Its volume choices are low, normal and high. Duration is 1 to 600 seconds.
 H200 uses `getSirenConfig`, `getSirenTypeList`, `getSirenStatus`, `setSirenConfig` and `setSirenStatus`.
-Its volume is an integer from 0 to 10, sent as text. Duration is 0 to 6000 seconds, as in python-kasa.
+Its volume is an integer from 1 to 10, sent as text. Duration is 1 to 6000 seconds.
+`hub_alarm_set` refuses mute (H100 `mute`, H200 volume 0). Muting the siren removes a safety net, and
+`setSirenConfig` is level 2 in every area, so a level 2 tool must not do it. UNVERIFIED: python-kasa allows an
+H200 duration of 0, but whether 0 means silence or no time limit is unknown, so tolpo refuses it.
 The H200 fixture includes ten Doorbell Ring tones. Select one with `hub_alarm_set` and play it with `hub_siren`.
 Confirmation is `play_alarm <hub id>` or `stop_alarm <hub id>` on H100, and `setSirenStatus <hub id>` on H200.
 Check both families' settings, tone lists, audible start and stop, and forced state refresh on hardware.
+Stopping the siren stays level 3 with confirmation. It silences an alarm that the hub's own rules may have raised,
+which lowers protection. On the H200 start and stop are the same method, so they cannot have different levels, and
+`stop_alarm` is level 3 in the doorbell area too. The refusal names the exact phrase, so a stop costs one more call.
+The siren always has a duration limit, and the hub's button and the app can stop it too.
+On the H100 an owner can allow `stop_alarm` alone. On the H200 that would allow starting too.
 H200 dedicated doorbell ring and custom sound upload are omitted. The audit did not establish their hub wire shapes.
 Standalone chime pairing and per-doorbell settings belong to the pairing and doorbell areas.
 
-Sensor wire field names were checked against the audit and parameter annotations.
+Sensor method and field names come from the audit and the app. None was tried on a device.
+UNVERIFIED: the `sensitivity` field name is inferred from an unannotated app field.
 `set_led_control` sends `led_onoff` as 0 or 1. Comfort setters can carry `notification`, a local setting.
 They do not change cloud push rules. `set_report_mode` takes `high_sensitivity` or `long_battery_life`.
-Motion detection interval is in seconds. Tools apply broad input bounds; firmware can refuse narrower limits.
+Motion detection interval is in seconds. UNVERIFIED: the real interval limits and the T300 siren duration limits
+are unknown. Tools apply broad bounds (1 to 86400 and 1 to 600 seconds); firmware can refuse narrower ones.
+The T300 siren settings are level 3 because muting or shortening the siren weakens leak warnings.
 UNVERIFIED: T300 tone choices are unknown. The optional sound accepts only the current `get_alarm_config` type.
 Check each sensor getter and setter on its stated model, including LED firmware support and persisted settings.
 Check the leak siren test audibly and confirm that it does not retry a rejected request.
@@ -66,6 +85,7 @@ Open-window sensor links must be T110 children of the same hub. Returned links u
 Calibration and descaling start a mechanical cycle. Read their status with `valve_settings` afterward.
 Shutdown is level 3 because `set_shutdown_info` can leave the valve fully closed and risk frozen pipes.
 Use `set_shutdown_info <valve id>` or `set_frost_protection <valve id>` as the appropriate confirmation phrase.
+The frost minimum is limited to the app's range, 5 to 15 C or 41 to 59 F.
 Night hours are minutes after midnight in the device's local time and can cross midnight.
 Schedule modes are `everyday` and `weekday_sat_sun`.
 UNVERIFIED: weekday numbering for anti-blocking and fractional schedule temperature encoding are unresolved.
@@ -86,6 +106,7 @@ New names resolve after the device update. The existing tolpo id remains stable.
 Check child rename and alias refresh on both hub families.
 LED requests follow python-kasa's shapes. H100 preserves known night-mode fields when switching the LED.
 Load diagnostics use `get_device_load_info` on H100 and `getDeviceLoadInfo` with `deviceLoad` on H200.
+UNVERIFIED: the H200 parameter shape `{"deviceLoad": {}}` is a guess.
 Check LED persistence and load counters on both families.
 The audit's `getSubDevDiagnoseMode` is a model getter, not a confirmed wire method. Debug log reads are omitted.
 
@@ -100,6 +121,4 @@ The rename mutation first exposed a weak test that stopped at policy refusal. Th
 and catches the missing input check. Scratch files were removed and the implementation stayed intact.
 
 The lead must add `src/tolpo/areas/*.py` to `package.json`'s `files` list so npm ships the area package.
-The full requested test command hits an existing real-ffmpeg socket test in `tests/test_snapshot.py`.
-It expects a refused connection; the sandbox reports unreachable. Socket-free validation excludes that single test
-as well as `tests/test_media.py` and `tests/test_pictures.py`. No device or server was contacted by this area.
+No device or server was contacted by this area.
