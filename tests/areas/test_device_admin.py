@@ -142,10 +142,36 @@ async def test_led_cached_read_and_schedule_preserves_response_layout(house, nes
     assert caller.sent[-1][2]["led_rule"] == "never"
 
 
+async def test_turning_a_camera_light_off_needs_the_confirmation_phrase_and_a_plug_light_does_not(house):
+    """Off hides that the camera is recording, so the camera write is level 3. A plug's night light is a setting."""
+    reg, caller, _ = house(3)
+    with pytest.raises(NeedsConfirmation, match="setLedStatus hallway-cam"):
+        await admin.device_led(reg, caller, "hallway-cam", "never")
+    with pytest.raises(NeedsConfirmation):
+        await admin.device_led(reg, caller, "hallway-cam", "never", confirm="setLedStatus desk-lamp")  # another device
+    assert "setLedStatus" not in caller.methods_sent()
+    await admin.device_led(reg, caller, "desk-lamp", "never")  # no phrase for a plug
+    assert caller.sent[-1][1] == "set_led_info"
+    reg, caller, _ = house(2)
+    with pytest.raises(Forbidden):
+        await admin.device_led(reg, caller, "hallway-cam", "never", confirm="setLedStatus hallway-cam")
+    assert "setLedStatus" not in caller.methods_sent()
+
+
+async def test_the_camera_light_tool_asks_for_the_phrase_instead_of_supplying_it(house, mcp):
+    reg, caller, _ = house(3)
+    async with mcp(reg, caller) as client:
+        refused = await client.call_tool("device_set_led", {"device": "hallway-cam", "rule": "never"})
+        wrong = await client.call_tool("device_set_led", {"device": "hallway-cam", "rule": "never", "confirm": "setLedStatus desk-lamp"})
+    for answer in (refused, wrong):
+        assert answer.is_error and "setLedStatus hallway-cam" in answer.content[0].text
+    assert "setLedStatus" not in caller.methods_sent()
+
+
 async def test_camera_led_and_refused_schedule(house):
     reg, caller, _ = house()
     assert await admin.device_led(reg, caller, "hallway-cam") == {"device": "hallway-cam", "enabled": "on"}
-    await admin.device_led(reg, caller, "hallway-cam", "never")
+    await admin.device_led(reg, caller, "hallway-cam", "never", confirm="setLedStatus hallway-cam")
     assert caller.sent[-1][1:] == ("setLedStatus", {"led": {"config": {"enabled": "off"}}})
     count = len(caller.sent)
     with pytest.raises(Unsupported):
@@ -231,7 +257,7 @@ WRITE_CASES = [
     (admin.device_clock, "desk-lamp", ("Etc/UTC",), "set_device_time"),
     (admin.device_clock, "hallway-cam", ("Etc/UTC",), "setTimezone"),
     (admin.device_led, "desk-lamp", ("never",), "set_led_info"),
-    (admin.device_led, "hallway-cam", ("never",), "setLedStatus"),
+    (admin.device_led, "hallway-cam", ("never", None, None, "setLedStatus hallway-cam"), "setLedStatus"),
     (admin.firmware_auto_update, "desk-lamp", (True, None, None, "set_auto_update_info desk-lamp"), "set_auto_update_info"),
     (admin.firmware_install, "desk-lamp", ("2.0", "fw_download desk-lamp"), "fw_download"),
 ]
@@ -535,7 +561,7 @@ async def test_smartcam_hub_uses_camera_setting_methods_and_cached_diagnostics(h
                           "getAppComponentList": {"app_component": {"app_component_list": [{"name": "led", "version": 1}]}}}
     for fn, args, method in [(admin.rename_device, ("Hub",), "setDeviceAlias"),
                              (admin.device_clock, ("Etc/UTC",), "setTimezone"),
-                             (admin.device_led, ("never",), "setLedStatus")]:
+                             (admin.device_led, ("never", None, None, "setLedStatus tapo-h200"), "setLedStatus")]:
         await fn(reg, caller, "tapo-h200", *args)
         assert caller.sent[-1][1] == method
     result = await admin.diagnostics(reg, caller, "tapo-h200")

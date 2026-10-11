@@ -14,7 +14,7 @@ reboot before refresh succeeds; that is reported without retrying the write.
 - `device_get_clock`: Read the SMART or camera protocol clock and time zone.
 - `device_set_clock`: Set SMART time and an IANA time zone. Omit the timestamp to use now. Devices using the camera protocol support only the zone.
 - `device_get_led`: Read SMART cached LED settings or the camera protocol LED on/off state.
-- `device_set_led`: Set always, never or a SMART custom night schedule with local minutes from midnight.
+- `device_set_led`: Set always, never or a SMART custom night schedule with local minutes from midnight. Level 2 on a SMART device. Level 3 on a camera or hub that speaks the camera dialect, with confirmation `setLedStatus <device id>`, because a camera with its light off no longer shows that it records.
 - `firmware_get`: Read SMART versions, automatic update settings and any locally cached release notes.
 - `firmware_check`: Ask a SMART device to check for an update. Read its returned version and release notes.
 - `firmware_progress`: Read SMART firmware download and upgrade state without polling or retrying.

@@ -36,7 +36,7 @@ METHODS = [
     policy.method("setTimezone", Tier.SETTING, CAM_DIALECT_KINDS, "Change the camera time zone."),
     policy.method("set_led_info", Tier.SETTING, SMART_KINDS, "Change the indicator LED rule or schedule."),
     policy.method("getLedStatus", Tier.READ, CAM_DIALECT_KINDS, "Read the camera indicator LED state."),
-    policy.method("setLedStatus", Tier.SETTING, CAM_DIALECT_KINDS, "Change the camera indicator LED state."),
+    policy.method("setLedStatus", Tier.SECURITY, CAM_DIALECT_KINDS, "Change the camera indicator light. Off hides that the camera is recording."),
     policy.method("get_latest_fw", Tier.READ, SMART_KINDS, "Ask the device to check for firmware updates."),
     policy.method("get_auto_update_info", Tier.READ, SMART_KINDS, "Read automatic firmware update settings."),
     # Turning automatic updates on lets the device install firmware and reboot unattended, and turning them off stops
@@ -192,7 +192,7 @@ async def device_clock(registry, caller, device, timezone=None, timestamp=None):
 _LED_FIELDS = ("led_rule", "led_status", "start_time", "end_time", "night_mode_type", "sunrise_offset", "sunset_offset")
 
 
-async def device_led(registry, caller, device, rule=None, start=None, end=None):
+async def device_led(registry, caller, device, rule=None, start=None, end=None, confirm=None):
     entry = registry.resolve_one(device)
     module = _module(entry, Module.Led, smart=not _camera_dialect(entry))
     if rule not in (None, "always", "never", "night_mode"):
@@ -207,7 +207,7 @@ async def device_led(registry, caller, device, rule=None, start=None, end=None):
             data = await _call(caller, entry, "getLedStatus", {"led": {"name": "config"}})
             return {"device": clean(entry.slug), **_pick(data.get("led", {}).get("config", {}), ("enabled",))}
         params = {"led": {"config": {"enabled": "on" if rule == "always" else "off"}}}
-        return await _write(registry, caller, entry, "setLedStatus", params, changed={"led_rule": rule})
+        return await _write(registry, caller, entry, "setLedStatus", params, changed={"led_rule": rule}, confirm=confirm)
     # python-kasa rate-limits get_led_info because repeated queries can crash P100.
     # Use the module's existing response rather than issuing another LED read.
     data = dict(module.data)
@@ -534,11 +534,13 @@ def tools(ctx):
         """Read the indicator rule. SMART uses cached LED data to avoid repeated device queries."""
         return await run(device_led, device)
 
-    @ctx.tool(title="Set device LED", tier=Tier.SETTING)
+    @ctx.tool(title="Set device LED", tier=Tier.SECURITY)
     async def device_set_led(device: DeviceRef, rule: Annotated[Literal["always", "never", "night_mode"], Field(description="Indicator LED rule")],
-                             start: Minute | None = None, end: Minute | None = None) -> dict[str, Any]:
-        """Set an LED rule or custom night schedule. Cameras support always and never only."""
-        return await run(device_led, device, rule, start, end)
+                             start: Minute | None = None, end: Minute | None = None,
+                             confirm: Annotated[str | None, Field(description="Exact phrase: setLedStatus <device slug>. Needed for cameras only")] = None) -> dict[str, Any]:
+        """Set an LED rule or custom night schedule. Cameras support always and never only. Turning a camera light off
+        hides that it is recording, so on a camera this is a level 3 action that needs the confirmation phrase."""
+        return await run(device_led, device, rule, start, end, confirm)
 
     @ctx.tool(title="Read firmware")
     async def firmware_get(device: DeviceRef) -> dict[str, Any]:

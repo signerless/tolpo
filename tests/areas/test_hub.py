@@ -470,7 +470,8 @@ async def test_child_rename_base64_refreshed_alias_and_errors(make_house, mcp, m
 
 @pytest.mark.parametrize("family", ["H100", "H200"])
 async def test_hub_led_read_write_refusal_errors_and_preserved_fields(make_house, mcp, monkeypatch, family):
-    reg, caller, _ = alarm_house(make_house, family, tier=2)
+    reg, caller, _ = alarm_house(make_house, family, tier=3 if family == "H200" else 2)
+    phrase = {"confirm": "setLedStatus tapo-h200"} if family == "H200" else {}  # the H200 light is level 3
     current = {"led_rule": "night_mode", "start_time": 1300, "end_time": 400, "night_mode_type": "custom",
                "sunrise_offset": 0, "sunset_offset": 0}
     read_method = "getLedStatus" if family == "H200" else "get_led_info"
@@ -483,9 +484,9 @@ async def test_hub_led_read_write_refusal_errors_and_preserved_fields(make_house
     monkeypatch.setattr(reg, "refresh", refresh)
     async with mcp(reg, caller) as client:
         read = await client.call_tool("hub_led", {"device": "tapo-h200"})
-        result = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": False})
+        result = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": False, **phrase})
         caller.respond(write_method, DeviceError("failed", error_code=None))
-        error = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": True})
+        error = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": True, **phrase})
         assert error.is_error and "tapo-h200" in error.content[0].text
         caller.respond(read_method, DeviceError("failed", error_code=None))
         error = await client.call_tool("hub_led", {"device": "tapo-h200"})
@@ -498,9 +499,24 @@ async def test_hub_led_read_write_refusal_errors_and_preserved_fields(make_house
     assert refreshed[-1] is True
     reg, caller, _ = alarm_house(make_house, family, tier=1)
     caller.respond("get_led_info", current)
-    with pytest.raises(Forbidden, match="level 2"):
-        await hub.hub_led_setting(reg, caller, "tapo-h200", True)
+    with pytest.raises(Forbidden, match="level 3" if family == "H200" else "level 2"):
+        await hub.hub_led_setting(reg, caller, "tapo-h200", True, **phrase)
     assert write_method not in caller.methods_sent()
+    if family == "H200":  # at level 3 the phrase is still needed
+        reg, caller, _ = alarm_house(make_house, family, tier=3)
+        with pytest.raises(NeedsConfirmation, match="setLedStatus tapo-h200"):
+            await hub.hub_led_setting(reg, caller, "tapo-h200", True)
+        assert write_method not in caller.methods_sent()
+
+
+async def test_the_h200_light_tool_asks_for_the_phrase_instead_of_supplying_it(make_house, mcp):
+    reg, caller, _ = alarm_house(make_house, "H200", tier=3)
+    async with mcp(reg, caller) as client:
+        refused = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": False})
+        wrong = await client.call_tool("hub_led_set", {"device": "tapo-h200", "enabled": False, "confirm": "setLedStatus desk-lamp"})
+    for answer in (refused, wrong):
+        assert answer.is_error and "setLedStatus tapo-h200" in answer.content[0].text
+    assert "setLedStatus" not in caller.methods_sent()
 
 
 @pytest.mark.parametrize("family", ["H100", "H200"])

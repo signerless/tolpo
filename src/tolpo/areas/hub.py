@@ -100,7 +100,7 @@ METHODS += [
     policy.method("get_led_info", Tier.READ, ["hub"], "Read the hub LED settings."),
     policy.method("getLedStatus", Tier.READ, ["hub"], "Read the hub LED settings."),
     policy.method("set_led_info", Tier.SETTING, ["hub"], "Change the hub status LED behavior."),
-    policy.method("setLedStatus", Tier.SETTING, ["hub"], "Change the hub status LED behavior."),
+    policy.method("setLedStatus", Tier.SECURITY, ["hub"], "Change the hub status LED. Off hides that the hub is working."),
     policy.method("get_device_load_info", Tier.READ, ["hub"], "Read the hub load and memory counters."),
     policy.method("getDeviceLoadInfo", Tier.READ, ["hub"], "Read the hub load and memory counters."),
 ]
@@ -569,7 +569,7 @@ async def rename_child(registry, caller, device: str, name: str) -> dict[str, An
     return await _write(registry, caller, entry, "set_device_info", params, {"name": clean(name)})
 
 
-async def hub_led_setting(registry, caller, device: str, enabled: bool | None = None) -> dict[str, Any]:
+async def hub_led_setting(registry, caller, device: str, enabled: bool | None = None, confirm: str | None = None) -> dict[str, Any]:
     entry = _entry(registry, device, {"hub"})
     cam = _smartcam(entry)
     if enabled is not None:
@@ -582,7 +582,7 @@ async def hub_led_setting(registry, caller, device: str, enabled: bool | None = 
             params = {k: current[k] for k in fields if k in current}
             params["led_rule"] = "always" if enabled else "never"
             method = "set_led_info"
-        return await _write(registry, caller, entry, method, params, {"led": enabled})
+        return await _write(registry, caller, entry, method, params, {"led": enabled}, confirm=confirm)
     method = "getLedStatus" if cam else "get_led_info"
     data = _object(await caller.call(entry, method, {"led": {"name": "config"}} if cam else None), entry, method)
     if cam:
@@ -702,13 +702,15 @@ def tools(ctx):
         with ctx.translated():
             return await hub_led_setting(ctx.registry, ctx.caller, device)
 
-    @ctx.tool(title="Set hub LED", tier=Tier.SETTING)
+    @ctx.tool(title="Set hub LED", tier=Tier.SECURITY)
     async def hub_led_set(device: DeviceRef,
-                          enabled: Annotated[bool, Field(description="Enable the hub status LED")]) -> dict[str, Any]:
-        """Set H100 or H200 status LED behavior and refresh its state."""
+                          enabled: Annotated[bool, Field(description="Enable the hub status LED")],
+                          confirm: Confirmation = None) -> dict[str, Any]:
+        """Set H100 or H200 status LED behavior and refresh its state. On an H200 this is a level 3 action,
+        because a hub with its light off no longer shows that it works, so it needs the confirmation phrase."""
         await ctx.ready_for([device])
         with ctx.translated():
-            return await hub_led_setting(ctx.registry, ctx.caller, device, enabled)
+            return await hub_led_setting(ctx.registry, ctx.caller, device, enabled, confirm)
 
     @ctx.tool(title="Read hub load diagnostics")
     async def hub_diagnostics_read(device: DeviceRef) -> dict[str, Any]:

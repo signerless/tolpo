@@ -37,7 +37,7 @@ and `hub_child_history` (T310), and `sensor_led`. The H100 paths, `sensor_sensit
 - `hub_child_history`: Read the history stored on a T310/T315 (last 24 hours) or a KE100 (today and yesterday), with omitted counts when capped.
 - `hub_child_rename`: Rename a sensor or valve at level 2, refresh its name, and keep its tolpo id stable.
 - `hub_led`: Read H100 or H200 status LED settings.
-- `hub_led_set`: Set H100 or H200 status LED behavior at level 2.
+- `hub_led_set`: Set H100 or H200 status LED behavior. Level 2 on an H100. Level 3 on an H200, with confirmation `setLedStatus <hub id>`, because a hub with its light off no longer shows that it works.
 - `hub_diagnostics_read`: Read hub load limits and memory counters without identifiers or support logs.
 
 `recent_events(registry, caller, hub, device=None, limit=50, after=None)` is the plain async polling function.
