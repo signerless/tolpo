@@ -190,7 +190,7 @@ async def storage_status(registry: Registry, caller: Any, entry: Entry) -> dict[
     cards = [card_view(c) for c in _items((raw or {}).get("harddisk_manage", {}).get("hd_info"))]
     out: dict[str, Any] = {"camera": entry.slug, "cards": cards} if cards else {"camera": entry.slug, "cards": [], "note": "the camera reports no memory card"}
     try:
-        # UNVERIFIED: the answer's shape; expected {"harddisk_manage": {"harddisk": {"loop": "on"}}}.
+        # Checked on a C465, a C610 and a C225: the answer is {"harddisk_manage": {"harddisk": {"loop": "on"}}}.
         loop = await caller.call(entry, "getCircularRecordingConfig", {"harddisk_manage": {"name": ["harddisk"]}})
         value = (loop or {}).get("harddisk_manage", {}).get("harddisk", {}).get("loop")
         if value in ("on", "off"):
@@ -328,7 +328,7 @@ async def recording_days(registry: Registry, caller: Any, entry: Entry, start: s
         entry, "searchDateWithVideo",
         {"playback": {"search_year_utility": {"channel": [0], "start_date": first.strftime("%Y%m%d"), "end_date": last.strftime("%Y%m%d")}}},
     )
-    # UNVERIFIED: the answer's list name; any list of items with an 8 digit `date` is read.
+    # Checked on a C465, a C610 and a C225: the days are in `search_results`. Any list of items with an 8 digit `date` is read.
     items, _ = _first_list((raw or {}).get("playback"), "search_results")
     days = sorted({f"{d[:4]}-{d[4:6]}-{d[6:]}" for i in items if re.fullmatch(r"\d{8}", d := str(i.get("date", "")))})
     return {"camera": entry.slug, "from": first.isoformat(), "to": last.isoformat(), "days": days}
@@ -394,7 +394,7 @@ async def recording_events(registry: Registry, caller: Any, entry: Entry, since:
         entry, "searchDetectionList",
         {"playback": {"search_detection_list": {"channel": 0, "start_time": start, "end_time": end, "start_index": 0, "end_index": limit - 1}}},
     )
-    # UNVERIFIED: the answer's list name; any list of items with a start time is read.
+    # Checked on a C465, a C610 and a C225: the list is `search_detection_list`, which the first-list fallback finds.
     items, _ = _first_list((raw or {}).get("playback"), "search_detection_results", "search_results")
     events = sorted((e for e in (_event(i) for i in items) if e), key=lambda e: e["start_ts"], reverse=True)[:limit]
     return {"camera": entry.slug, "from": _local(start), "to": _local(end), "times": _zone(), "events": events}

@@ -99,9 +99,10 @@ Other areas can opt into the room resolver by import.
 
 ## Verification
 
-All new behavior is tested only with fakes. Complete synthetic response layouts match the
+The tests use fakes. Complete synthetic response layouts match the
 sanitized P115, C225 and H200 fixtures. Read shapes were also compared with L430C, other
-cameras and D230. No real device or cloud host was contacted. Before release, verify SMART nickname,
+cameras and D230. The fakes contact no real device or cloud host. The end of this page says what was tried on real
+devices. Before release, verify SMART nickname,
 avatar, coordinate scaling, time zone/DST behavior, flat and nested LED schedule layouts and update
 windows on supported SMART lights, plugs, switches and hubs. Verify camera and H200 rename,
 timezone, LED and

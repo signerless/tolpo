@@ -187,6 +187,7 @@ operation opt-in, apply and rollback confirmations, expiry, plan hashes, drift c
 checks, object ownership, native timeouts, hidden identities, text cleaning, hostname and address validation, error
 masking, device scope, retention, private-file checks, symbolic links, the audit chain and rate limits.
 
-Checked on 2026-10-12: `network_providers` and `network_new_destinations` ran against the real home with no provider
-configured and answered as designed. No router, DNS server or firewall was contacted, so every provider and the
-nftables enforcement are tested only with fakes.
+Checked on 2026-10-12: `network_providers`, `network_new_destinations`, `network_device_traffic`,
+`network_cloud_dependency` and `network_upnp_audit` ran against the real home with no provider configured and answered
+as designed (no destinations, no mappings, and a note that no provider is set up). No router, DNS server or firewall was
+contacted, so every provider and the nftables enforcement are tested only with fakes.

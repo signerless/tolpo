@@ -265,8 +265,9 @@ what is on.
 On top of these, `home_overview`, `list_devices`, `get_device`, `set_power`, `set_light`, `set_feature`,
 `camera_snapshot` and `rescan` work for every device.
 
-All the areas together are about 240 tools, which is about 40,000 tokens of descriptions. A client that loads every
-tool at once can use `areas` to keep only what it needs.
+All the areas together are 237 tools. Their names, descriptions and parameter lists come to about 40,000 tokens. The
+standard setup switches on only the areas that match the devices found at home. A client that loads every tool at once
+can use `areas` to keep only what it needs.
 
 Most of this was built from analysis of the Tapo app and tested against simulated devices. Each area page says
 which parts were tried on real devices and which were not. Where the exact form of a request was a guess, the

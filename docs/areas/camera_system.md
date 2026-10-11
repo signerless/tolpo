@@ -4,8 +4,8 @@ These tools change how a camera or doorbell moves, looks, sounds and runs. They 
 session. Most calls read the camera's component list first and refuse a feature the model does not report. The
 PTZ stop is the exception: it is always sent. Writes refresh the device state afterwards.
 
-All of this was tested only with fakes and with sanitized read responses from the owner's C225, C465, C610 and
-the hub-managed D230 doorbell. No write has been sent to a real camera yet.
+The tests use fakes and sanitized read responses from the owner's C225, C465, C610 and the hub-managed D230 doorbell.
+The end of this page says what was also tried on real devices: reads, and one write (the microphone volume).
 
 ## Pan and tilt
 

@@ -1,8 +1,10 @@
 # Hubs, sensors and radiator valves
 
-These tools use the existing local session and the owner's account. All execution was tested with fakes only.
+These tools use the existing local session and the owner's account. The tests use fakes. The end of this page says what
+was also tried on a real H200.
 Sanitized H200 siren and LED response bodies and empty T110/T300/T310 trigger logs are covered by the fakes.
-Nonempty events follow the audit and python-kasa. No valve fixtures were available. Real-device verification is still required.
+Nonempty events follow the audit and python-kasa. No valve fixtures were available, so the valve tools were never tried
+on hardware.
 
 The owner's H200 with T110, T300 and T310 sensors can check these tools: `hub_alarm_config`, `hub_alarm_set`,
 `hub_siren`, `hub_led`, `hub_led_set`, `hub_diagnostics_read`, `hub_events`, `hub_child_rename`, `sensor_settings`,

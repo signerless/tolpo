@@ -85,16 +85,18 @@ Read from the owner's C225, C465 and C610: the request and answer of `getSdCardS
 the record plan's text form (`["0000-2400:2"]`). The video channel's login, encryption and live preview work on those
 cameras already.
 
+The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList` were also checked on a C465, a C610 and
+a C225. `searchVideoWithUTC` needs `"id": 0` and a `player_id` in its request: without them the camera answers INTERNAL_UNKNOWN_ERROR (the C465 and C610 take either one, the C225 only the `player_id`). The
+answer is `search_video_results`, a list of `{"search_video_results_N": {startTime, endTime, channel, video_type}}`,
+with `to_be_continued`. `searchDetectionList` answers `search_detection_list` with flat rows (`start_time`, `end_time`,
+`alarm_type`, and a number `events_1`), `total_num` and `to_be_continued`; the rows carry no `file_id`. Older firmware
+may answer only `searchVideoOfDay`; tolpo does not send it.
+
+The answer of `getCircularRecordingConfig` (loop recording on or off) was read from the same three cameras.
+
 Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`), and marked `UNVERIFIED` in the code:
 
-- The answer of `getCircularRecordingConfig` (`{"harddisk_manage": {"harddisk": {"loop": "on"}}}` expected) and the
-  shape of `setCircularRecordingConfig`, `setRecordPlan` and `formatSdCard` on a real camera.
-- The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList` were checked on a C465, a C610 and
-  a C225. `searchVideoWithUTC` needs `"id": 0` and a `player_id` in its request: without them the camera answers INTERNAL_UNKNOWN_ERROR (the C465 and C610 take either one, the C225 only the `player_id`). The
-  answer is `search_video_results`, a list of `{"search_video_results_N": {startTime, endTime, channel, video_type}}`,
-  with `to_be_continued`. `searchDetectionList` answers `search_detection_list` with flat rows (`start_time`, `end_time`,
-  `alarm_type`, and a number `events_1`), `total_num` and `to_be_continued`; the rows carry no `file_id`. Older firmware
-  may answer only `searchVideoOfDay`; tolpo does not send it.
+- The shape of `setCircularRecordingConfig`, `setRecordPlan` and `formatSdCard` on a real camera.
 - The meaning of the record plan codes: 1 continuous, 2 events, 3 the low frame rate mode, from the app's code. The
   owner's cameras show 2 and 3, but which behavior each gives was not checked.
 - The event type numbers: taken from the app's cloud list (6 person, 8 vehicle, 2 motion...). That the camera uses the

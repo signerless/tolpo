@@ -65,7 +65,8 @@ Their writable units or value enums are not established. Fan sleep state is incl
 
 ## Verification
 
-All tools were tested only with fakes. P115 fixtures arrived during implementation and determine the read shapes.
+The tests use fakes. P115 fixtures arrived during implementation and determine the read shapes. The end of this page says
+what was also tried on a real P115.
 Rules use `rule_list`, `enable` and their family-specific `*_rule_max_count`.
 Empty rule lists are omitted. A reported zero `sum` remains in the output.
 Price reads preserve the nested seasonal configuration and 24 hourly slots per weekday/weekend array.
