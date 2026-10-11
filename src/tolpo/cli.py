@@ -1,5 +1,6 @@
 """Command line: `serve` runs the HTTP API, `mcp` the MCP server, `scan` prints what it finds, `snapshot` saves one
-picture from a camera so you can check the setup yourself, and `watch` opens a live window of a camera."""
+picture from a camera so you can check the setup yourself, `watch` opens a live window of a camera, and
+`automation` shows, stops or resumes the automation rules."""
 
 from __future__ import annotations
 
@@ -148,6 +149,27 @@ async def _watch(cfg: Config, ref: str, quality: str, seconds: int | None = None
         await registry.stop()
 
 
+def _automation(action: str) -> int:
+    """The owner's switch for the automation engine. An agent can stop the rules; only the owner can start them again
+    from here, and an agent needs level 3 and a phrase to do it through the tool."""
+    from .automation.store import Store
+
+    store = Store()
+    try:
+        state = store.load()
+        if action in ("kill", "resume"):
+            state.settings.killed = action == "kill"
+            store.save(state)
+    except (OSError, ValueError) as exc:
+        print(f"The automation state could not be used: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    enabled = sum(rule.enabled for rule in state.rules)
+    print(f"{len(state.rules)} rule(s), {enabled} enabled. Automation is {'STOPPED' if state.settings.killed else 'running'}.")
+    if action == "resume":
+        print("A tolpo server that is already running picks this up when it restarts.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tolpo", description=__doc__)
     parser.add_argument("--config", help="path to config.toml")
@@ -165,7 +187,11 @@ def main(argv: list[str] | None = None) -> None:
     watch.add_argument("camera", help="camera id or name")
     watch.add_argument("--quality", choices=("low", "high"), default="low")
     watch.add_argument("--seconds", type=int, help="close the window after this many seconds")
+    auto = sub.add_parser("automation", help="show, stop or resume the automation rules (no Tapo account needed)")
+    auto.add_argument("action", choices=("status", "kill", "resume"))
     args = parser.parse_args(argv)
+    if args.command == "automation":
+        sys.exit(_automation(args.action))
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = load_config(args.config)

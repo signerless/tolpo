@@ -56,6 +56,7 @@ def declare(name="set_alarm", tier=Tier.SECURITY):
     {"triggers": [{"kind": "state", "predicate": {"device": "desk-lamp", "field": "ssid", "value": "x"}}]},
     {"triggers": [{"kind": "rule", "rule": "r1"}]},
     {"minimum_interval": 0},
+    {"minimum_interval": 4.9},
     {"actions": [{"kind": "light", "device": "office-1", "light": {"brightness": 101}}]},
     {"actions": [{"kind": "light", "device": "office-1", "light": {"hue": 10}}]},
     {"actions": [{"kind": "delay", "seconds": 5}]},
@@ -367,7 +368,7 @@ async def test_adapter_obeys_owner_level_and_per_call_confirmation(setup):
 
 @pytest.mark.anyio
 async def test_mcp_all_tools_and_lifecycle(make_house, mcp, monkeypatch):
-    reg, caller, devices = make_house()
+    reg, caller, devices = make_house(tier=2)
     clock = FakeClock(datetime(2026, 3, 20, 12, tzinfo=timezone.utc))
     async with mcp(reg, caller) as client:
         eng = reg._automation_engine
@@ -418,9 +419,9 @@ async def test_continuous_engine_starts_lazily_and_stops(make_house):
 @pytest.mark.anyio
 async def test_multiple_clock_triggers_do_not_replay_same_minute(setup):
     eng, source, clock, *_ = setup()
-    eng.create(rule(triggers=[{"kind": "clock", "time": "12:00"}, {"kind": "clock", "time": "12:00"}], minimum_interval=1))
+    eng.create(rule(triggers=[{"kind": "clock", "time": "12:00"}, {"kind": "clock", "time": "12:00"}], minimum_interval=5))
     assert (await eng.tick())["fired"] == ["r1"]
-    clock.advance(2)
+    clock.advance(6)
     assert (await eng.tick())["fired"] == []
 
 
@@ -498,7 +499,7 @@ async def test_mcp_tool_dispatch_with_levels_errors_and_validation(make_house, m
 
 @pytest.mark.anyio
 async def test_kill_cancels_live_task_pending_work_and_restart(make_house, mcp):
-    reg, caller, devices = make_house()
+    reg, caller, devices = make_house(tier=3)
     async with mcp(reg, caller) as client:
         eng = reg._automation_engine
         eng.clock = FakeClock(datetime(2026, 3, 20, 12, tzinfo=timezone.utc))
@@ -512,7 +513,7 @@ async def test_kill_cancels_live_task_pending_work_and_restart(make_house, mcp):
         assert not result.is_error
         assert eng.task is None and eng.state.runs == []
         assert await eng.tick() == {"killed": True, "fired": []}
-        result = await client.call_tool("automation_settings", {"settings": {"killed": False}})
+        result = await client.call_tool("automation_settings", {"settings": {"killed": False}, "confirm": "automation_resume"})
         assert not result.is_error and eng.task is not None
         eng.clock.advance(100)
         assert (await eng.tick()).get("pending", 0) == 0
@@ -871,3 +872,106 @@ async def test_idle_ticks_do_not_rewrite_the_store(setup):
     for _ in range(3):
         await eng.tick()
     assert eng.store.path.stat().st_ino == before
+
+
+# ---- who may set up rules, and who may start them again after a stop ------------------------------------------------
+
+
+async def call(client, name, **args):
+    return await client.call_tool(name, args)
+
+
+def payload(**extra):
+    data = rule(**extra).model_dump(mode="json")
+    data["enabled"] = False
+    return data
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool, args", [
+    ("automation_create", {"rule": payload()}),
+    ("automation_enable", {"rule_id": "r1"}),
+    ("automation_delete", {"rule_id": "r1"}),
+    ("automation_settings", {"settings": {"killed": False}}),
+])
+async def test_setting_up_rules_is_a_level_2_action(make_house, mcp, tool, args):
+    reg, caller, _ = make_house(tier=1)
+    async with mcp(reg, caller) as client:
+        refused = await call(client, tool, **args)
+        assert refused.is_error and "level 2" in refused.content[0].text
+        assert "allow_methods" not in refused.content[0].text and "tier" not in refused.content[0].text
+        assert (await call(client, "automation_list")).structured_content["rules"] == []
+
+
+@pytest.mark.anyio
+async def test_the_owner_can_name_one_automation_tool_instead_of_raising_the_level(make_house, mcp):
+    reg, caller, _ = make_house(tier=1, allow_methods=["automation_create"])
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_create", rule=payload())).is_error
+        refused = await call(client, "automation_enable", rule_id="r1")
+        assert refused.is_error and "level 2" in refused.content[0].text
+
+
+@pytest.mark.anyio
+async def test_stopping_and_disabling_are_allowed_even_when_the_owner_turned_the_level_down(make_house, mcp):
+    reg, caller, _ = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_create", rule=payload())).is_error
+        assert not (await call(client, "automation_enable", rule_id="r1")).is_error
+        reg.cfg = replace(reg.cfg, tier=0)
+        disabled = await call(client, "automation_disable", rule_id="r1")
+        assert not disabled.is_error
+        stopped = await call(client, "automation_settings", settings={"killed": True})
+        assert not stopped.is_error and stopped.structured_content["settings"]["killed"] is True
+
+
+@pytest.mark.anyio
+async def test_starting_rules_again_after_a_stop_needs_level_3_and_the_phrase(make_house, mcp):
+    reg, caller, _ = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_settings", settings={"killed": True})).is_error
+        for level_too_low in (call(client, "automation_settings", settings={"killed": False}),
+                              call(client, "automation_settings", settings={"killed": False}, confirm="automation_resume")):
+            refused = await level_too_low
+            assert refused.is_error and "level 3" in refused.content[0].text
+        assert (await call(client, "automation_list")).structured_content["killed"] is True
+    reg, caller, _ = make_house(tier=3)
+    async with mcp(reg, caller) as client:
+        assert not (await call(client, "automation_settings", settings={"killed": True})).is_error
+        for wrong in (None, "yes", "automation_resume please"):
+            args = {"settings": {"killed": False}, **({"confirm": wrong} if wrong else {})}
+            refused = await call(client, "automation_settings", **args)
+            assert refused.is_error and "automation_resume" in refused.content[0].text
+        assert (await call(client, "automation_list")).structured_content["killed"] is True
+        resumed = await call(client, "automation_settings", settings={"killed": False}, confirm="automation_resume")
+        assert not resumed.is_error
+        assert (await call(client, "automation_list")).structured_content["killed"] is False
+
+
+@pytest.mark.anyio
+async def test_a_rule_stores_the_short_id_of_each_device_it_names(make_house, mcp):
+    reg, caller, devices = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        data = payload(actions=[{"kind": "power", "device": "Desk Lamp", "on": True}],
+                       triggers=[{"kind": "sensor", "device": "OFFICE 2"},
+                                 {"kind": "state", "predicate": {"device": "HALLWAY-CAM", "field": "state", "value": True}}])
+        data["conditions"] = [{"device": "Office 1", "field": "state", "op": "eq", "value": True}]
+        created = await call(client, "automation_create", rule=data)
+        assert not created.is_error, created
+    stored = reg._automation_engine.state.rules[0]
+    assert stored.actions[0].device == "desk-lamp"
+    assert stored.conditions[0].device == "office-1"
+    assert stored.triggers[0].device == "office-2" and stored.triggers[1].predicate.device == "hallway-cam"
+    devices["lamp"].alias = "Somebody renamed me"  # the rule still points at the same device
+    assert reg.resolve_one(stored.actions[0].device) is reg.resolve_one("somebody renamed me")
+
+
+@pytest.mark.anyio
+async def test_a_rule_naming_an_unknown_or_ambiguous_device_is_refused_and_nothing_is_stored(make_house, mcp):
+    reg, caller, _ = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        for ref in ("no such device", "office*"):
+            data = payload(actions=[{"kind": "power", "device": ref, "on": True}])
+            refused = await call(client, "automation_create", rule=data)
+            assert refused.is_error and "no single device" in refused.content[0].text
+        assert (await call(client, "automation_list")).structured_content["rules"] == []

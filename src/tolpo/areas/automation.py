@@ -8,11 +8,16 @@ from pydantic import BeforeValidator, Field, ValidationError
 
 from tolpo import policy
 from tolpo.automation import Engine, Rule, Settings
+from tolpo.calls import NeedsConfirmation
+from tolpo.registry import Forbidden, RegistryError
+from tolpo.views import clean
 from tolpo.automation.engine import public_rule
 from tolpo.automation.tools import MCPToolExecutor
 from tolpo.policy import Tier
 
 log = logging.getLogger(__name__)
+
+RESUME_PHRASE = "automation_resume"
 
 METHODS = [
     # T110, T300 and T310 sensors behind an H200 answer {"start_id": 0} with {"logs": [], "start_id": 0, "sum": 0}
@@ -87,6 +92,26 @@ def tools(ctx):
         ctx.tool = register
     install_lifecycle(ctx)
 
+    def owner_allows(level, tool):
+        """Rules act while nobody watches, so making or changing them is a level 2 action (a schedule). The owner can
+        also name the single tool in `allow_methods`."""
+        cfg = ctx.registry.cfg
+        if cfg.tier < level and tool not in cfg.allow_methods:
+            raise Forbidden(f"{tool} is a level {level} action (it sets up actions that run without anyone asking) and the owner's policy blocks it")
+
+    async def pin_devices(rule):
+        """Replace every device name in the rule by the device's own short id, so that a rename in the Tapo app, or another
+        device taking the same name, cannot send the rule's actions to a different device."""
+        refs = sorted(rule.device_refs())
+        await ctx.ready_for(refs)
+        names = {}
+        for ref in refs:
+            try:
+                names[ref] = ctx.registry.resolve_one(ref).slug
+            except RegistryError:
+                raise ToolError(f"automation change refused: no single device matches {clean(ref)!r}") from None
+        return rule.with_devices(names)
+
     def engine():
         try:
             return engine_for(ctx)
@@ -109,8 +134,12 @@ def tools(ctx):
 
     @ctx.tool(title="Create local automation", tier=Tier.SETTING)
     async def automation_create(rule: Annotated[Rule, BeforeValidator(rule_input), Field(description="Local rule with unique id, triggers, conditions and ordered actions. Disabled by default.")]) -> dict[str, Any]:
-        """Create a local rule. Actions use the owner's current policy at every execution."""
-        return await change(lambda eng: eng.create(rule))
+        """Create a local rule. Actions use the owner's current policy at every execution. Device names in the rule are
+        stored as the devices' short ids, and the rule refuses to run on a device that is gone."""
+        with ctx.translated():
+            owner_allows(2, "automation_create")
+        pinned = await pin_devices(rule)
+        return await change(lambda eng: eng.create(pinned))
 
     @ctx.tool(title="List local automations")
     async def automation_list() -> dict[str, Any]:
@@ -127,6 +156,8 @@ def tools(ctx):
     @ctx.tool(title="Enable local automation", tier=Tier.SETTING)
     async def automation_enable(rule_id: Annotated[str, Field(description="Local rule id")]) -> dict[str, Any]:
         """Enable a rule and lazily start local evaluation while the server runs."""
+        with ctx.translated():
+            owner_allows(2, "automation_enable")
         return await change(lambda eng: eng.enabled(rule_id, True))
 
     @ctx.tool(title="Disable local automation", tier=Tier.SETTING)
@@ -137,6 +168,8 @@ def tools(ctx):
     @ctx.tool(title="Delete local automation", tier=Tier.SETTING)
     async def automation_delete(rule_id: Annotated[str, Field(description="Local rule id")]) -> dict[str, Any]:
         """Delete a local rule and its queued actions."""
+        with ctx.translated():
+            owner_allows(2, "automation_delete")
         return await change(lambda eng: eng.delete(rule_id))
 
     @ctx.tool(title="Preview local automations")
@@ -158,13 +191,22 @@ def tools(ctx):
             return {"alerts": eng.store.alerts(clear=clear, limit=limit)}
 
     @ctx.tool(title="Configure local automation", tier=Tier.SETTING)
-    async def automation_settings(settings: Annotated[Settings, BeforeValidator(settings_input), Field(description="Complete local settings: IANA timezone, coordinates, poll interval, quiet hours and killed switch")]) -> dict[str, Any]:
+    async def automation_settings(settings: Annotated[Settings, BeforeValidator(settings_input), Field(description="Complete local settings: IANA timezone, coordinates, poll interval, quiet hours and killed switch")],
+                                  confirm: Annotated[str | None, Field(description=f"Only to switch automation back on after it was stopped: the exact phrase {RESUME_PHRASE}")] = None) -> dict[str, Any]:
         """Replace engine settings. Killing stops a running evaluation at once, cancels pending runs and blocks
-        ticks until cleared."""
+        ticks until cleared. Stopping is always allowed. Switching rules back on after a stop is a level 3 action
+        that needs the confirmation phrase, and the owner can also do it from the terminal with `tolpo automation resume`."""
         eng = engine()
         if settings.killed:
             # Do not wait for a running tick: stop the loop first, then record the switch.
             await eng.halt()
+        else:
+            with ctx.translated():
+                owner_allows(2, "automation_settings")
+                if eng.state.settings.killed:
+                    owner_allows(3, "automation_resume")
+                    if confirm != RESUME_PHRASE:
+                        raise NeedsConfirmation(f"automation_resume is a level 3 action: it lets stopped rules act again. To go ahead, call again with confirm={RESUME_PHRASE!r}")
 
         def update(eng):
             eng.state.settings = settings

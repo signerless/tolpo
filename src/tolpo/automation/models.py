@@ -17,6 +17,7 @@ class Model(BaseModel):
 Ref = Annotated[str, Field(min_length=1, max_length=128)]
 Minute = Annotated[str, Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")]
 Seconds = Annotated[float, Field(ge=0, le=86400)]
+MIN_INTERVAL = 5  # a relay switched every second can be ruined; two rules that undo each other would do exactly that
 
 
 class Predicate(Model):
@@ -134,7 +135,7 @@ class Rule(Model):
     condition_mode: Literal["all", "any"] = "all"
     windows: list[Window] = Field(default_factory=list, max_length=16)
     actions: list[Action] = Field(min_length=1, max_length=32)
-    minimum_interval: Annotated[float, Field(ge=1, le=86400)] = 60
+    minimum_interval: Annotated[float, Field(ge=MIN_INTERVAL, le=86400)] = 60
 
     @model_validator(mode="after")
     def no_self(self):
@@ -143,6 +144,33 @@ class Rule(Model):
         if self.actions[-1].kind == "delay":
             raise ValueError("delay cannot be the last action")
         return self
+
+    def device_refs(self) -> set[str]:
+        """Every device the rule names, as it was written."""
+        refs = set()
+        for trigger in self.triggers:
+            refs.update(ref for ref in (trigger.device, trigger.predicate and trigger.predicate.device) if ref)
+        refs.update(condition.device for condition in self.conditions)
+        refs.update(action.device for action in self.actions if action.device)
+        return refs
+
+    def with_devices(self, names: dict[str, str]) -> "Rule":
+        """A copy in which each device the rule names is replaced by `names[ref]`. A rule keeps pointing at the device it
+        was written for, also after the device is renamed or another device takes its name."""
+
+        def swap(ref):
+            return names.get(ref, ref) if ref else ref
+
+        data = self.model_dump()
+        for trigger in data["triggers"]:
+            trigger["device"] = swap(trigger["device"])
+            if trigger["predicate"]:
+                trigger["predicate"]["device"] = swap(trigger["predicate"]["device"])
+        for condition in data["conditions"]:
+            condition["device"] = swap(condition["device"])
+        for action in data["actions"]:
+            action["device"] = swap(action["device"])
+        return type(self).model_validate(data)
 
 
 class Settings(Model):

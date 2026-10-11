@@ -3,16 +3,16 @@
 Rules run on the tolpo host. They do not appear in the Tapo app. No cloud account or push service is used.
 Keep tolpo running for rules to fire. Evaluation starts when the first rule is enabled. Enabled rules resume when the server restarts. Shutdown cancels the loop before the registry disconnects.
 
-- `automation_create`: Create a validated local rule. The default is disabled.
+- `automation_create`: Create a validated local rule. The default is disabled. Level 2. Each device the rule names is stored as the device's own short id, so a rename in the Tapo app cannot send the rule to another device. A name that matches no device, or several, is refused.
 - `automation_list`: List compact rule summaries and the kill switch state.
 - `automation_show`: Show a rule summary without action parameters or condition values.
-- `automation_enable`: Enable a rule and start the evaluation loop lazily.
+- `automation_enable`: Enable a rule and start the evaluation loop lazily. Level 2.
 - `automation_disable`: Disable a rule and cancel its pending actions.
-- `automation_delete`: Delete a rule and cancel its pending actions.
+- `automation_delete`: Delete a rule and cancel its pending actions. Level 2.
 - `automation_dry_run`: Read current observations and report what would fire now without writes or consumed events.
 - `automation_tick`: Evaluate once and run due actions through the current owner policy.
 - `automation_alerts`: Read the alert outbox. Optionally clear only the returned records.
-- `automation_settings`: Replace timezone, location, polling interval, quiet hours and kill switch settings.
+- `automation_settings`: Replace timezone, location, polling interval, quiet hours and kill switch settings. Level 2. Stopping all rules is always allowed. Starting them again after a stop is level 3 and needs `confirm="automation_resume"`.
 
 No HTTP routes are added.
 
@@ -38,7 +38,7 @@ Polling can miss short state changes or intermediate camera alerts. Sensor logs 
 
 `windows` limits a rule to one or more `{start, end, weekdays}` ranges. Ends are exclusive.
 An overnight range belongs to the weekday on which it begins. Equal start and end is an empty range.
-The default `minimum_interval` is 60 seconds and the minimum is one second.
+The default `minimum_interval` is 60 seconds and the minimum is five seconds, because two rules that undo each other would otherwise switch a relay every second.
 Clock events fire once in their selected minute. Missed minutes are not replayed. DST repeated minutes fire once per local date. Choose a polling interval below one minute for time rules.
 
 Actions run in order:
@@ -100,3 +100,18 @@ Geofencing, cloud sync, voice assistants, AI actions and push delivery are not i
 Safety mutations in isolated scratch copies were caught by tests: action levels, fresh confirmations, hidden features, private parameter keys, light bounds, name flattening, raw error hiding, response hiding, cycles, the kill switch, cooldowns, dry-run isolation, private file modes, cursor reservation, camera privacy boundaries, RTSP refusal, MCP validation privacy, store versions and queue validation. Every mutation was checked with a diff before testing.
 The prescribed Python suite reached a pre-existing localhost ffmpeg socket test whose expected error differs under the sandbox. With that additional socket test deselected, the allowed suite passed. Node launcher tests and release metadata checks also passed.
 The npm file list needs explicit `src/tolpo/automation/*.py` and `src/tolpo/areas/*.py` entries before this package ships. No shared file was edited.
+
+## Who may do what
+
+Rules act while nobody is watching, so setting them up is a schedule, which is a level 2 action. The owner can also allow a
+single tool by naming it in `allow_methods`, for example `automation_create`. Disabling a rule and stopping everything are
+always allowed, even when the owner lowered the level afterwards.
+
+Starting rules again after a stop is level 3 and needs the phrase `automation_resume`. The owner can do it without an
+agent from a terminal:
+
+- `tolpo automation status`: how many rules exist and whether automation is stopped.
+- `tolpo automation kill`: stop all rules. A running server obeys this at its next evaluation.
+- `tolpo automation resume`: allow rules again. A server that is already running picks this up when it restarts.
+
+These commands need no Tapo account and never contact a device.
