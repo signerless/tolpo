@@ -439,7 +439,7 @@ async def test_a_picture_of_a_past_moment_is_the_first_frame_of_a_playback_from_
     playback = request["params"]["playback"]
     assert request["params"]["method"] == "get" and set(request["params"]) == {"playback", "method"}
     assert {k: v for k, v in playback.items() if k != "client_id"} == {"scale": "1/1", "start_time": "1760000000", "end_time": "1760000002"}
-    assert isinstance(playback["client_id"], int)
+    assert 1 <= playback["client_id"] <= 200
     (args,) = ffmpeg.calls()
     assert args[args.index("-f") + 1] == "h264" and ffmpeg.stdin_heads()[0].startswith("0000000165")  # raw video from the stream
     assert caller.sent == []  # nothing went through the control plane
@@ -622,10 +622,12 @@ async def test_a_recording_is_copied_to_the_owners_folder_and_only_its_path_is_r
     assert second.structured_content["file"].endswith("-10s-2.ts")  # never overwritten
     assert len(json.dumps(out)) < 300  # the video itself never reaches the agent
     # Checked on a C465: the recording is asked for from its exact start to its exact end, with a channel and a client id
-    download = dict(camera.requests[0]["params"]["download"])
-    assert isinstance(download.pop("client_id"), int)
+    opening, request = camera.requests[:2]  # a playback first: without one the camera sends no video for a download
+    assert opening["params"]["playback"]["start_time"] == "1760000000"
+    download = dict(request["params"]["download"])
+    assert 1 <= download.pop("client_id") <= 200  # checked on a C465: ids of 65535 and more get no video
     assert download == {"channels": [0], "media_type": 0, "start_time": "1760000000", "end_time": "1760000010"}
-    assert camera.requests[0]["params"]["method"] == "get"
+    assert request["params"]["method"] == "get"
     assert sorted(p.name for p in tmp_path.iterdir()) == [f"hallway-cam-{stamp}-10s-2.ts", f"hallway-cam-{stamp}-10s.ts"]
 
 
@@ -638,8 +640,9 @@ async def test_a_moment_inside_a_recording_copies_the_whole_recording(make_house
         recording(caller, start=1760000000, length=21)
         out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000008", 30, caller)
     assert out["file"].endswith("-21s.ts")  # named after the recording, not after the moment asked for
-    download = camera.requests[0]["params"]["download"]
+    download = camera.requests[-1]["params"]["download"]
     assert (download["start_time"], download["end_time"]) == ("1760000000", "1760000021")
+    assert camera.requests[0]["params"]["playback"]["start_time"] == "1760000000"  # opened at the recording's start
 
 
 @pytest.mark.anyio

@@ -525,10 +525,11 @@ async def download_clip(registry: Registry, entry: Entry, start_time: str, secon
     base = f"{entry.slug}-{datetime.fromtimestamp(first).strftime('%Y%m%d-%H%M%S')}-{length}s"
     host, port = media_address(entry)
     # Checked on a C465: channels, a client id, the media type (0 is video) and the exact start and end, times as text.
-    request = {"download": {"channels": [0], "client_id": secrets.randbelow(2**31), "media_type": 0, "start_time": str(first), "end_time": str(last)}}
+    request = {"download": {"channels": [0], "client_id": media.client_id(), "media_type": 0, "start_time": str(first), "end_time": str(last)}}
     async with entry.picture_lock:
         partial, sink = _open_partial(folder, base)  # only a file this call created is ever removed below
         try:
+            await media.open_playback(host, registry.cfg.password, first, port=port)  # without one the camera sends no video
             with sink:
                 result = await media.download(
                     host, registry.cfg.password, request, sink.write, port=port,

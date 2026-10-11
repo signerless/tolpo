@@ -472,6 +472,22 @@ async def live_chunks(
         await session.close()
 
 
+def client_id() -> int:
+    """Checked on a C465: a playback or download gets video for a client id up to 255 and none for 65535 or more."""
+    return secrets.randbelow(200) + 1
+
+
+async def open_playback(host: str, password: str, start: int, *, port: int = MEDIA_PORT, psk_port: int = PSK_PORT) -> None:
+    """Start a playback at `start` and stop at the first video. Checked on a C465: it answers a download with a response and
+    no video until a playback has been opened, and after one playback the downloads work."""
+    feed = playback_chunks(host, password, start, start + 1, port=port, psk_port=psk_port)
+    try:
+        async for _ in feed:
+            break
+    finally:
+        await feed.aclose()
+
+
 async def playback_chunks(
     host: str, password: str, start: int, end: int, *, port: int = MEDIA_PORT, timeout: float = CONNECT_TIMEOUT,
     psk_port: int = PSK_PORT,
@@ -483,7 +499,7 @@ async def playback_chunks(
     session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout, what="the recording")
     await session.open()
     try:
-        request = {"playback": {"client_id": secrets.randbelow(2**31), "scale": "1/1", "start_time": str(start), "end_time": str(end)}, "method": "get"}
+        request = {"playback": {"client_id": client_id(), "scale": "1/1", "start_time": str(start), "end_time": str(end)}, "method": "get"}
         await session.request(request, {"X-Data-Window-Size": str(WINDOW_SIZE)})
         async for item in session.events(ack=True):
             if isinstance(item, Notice):

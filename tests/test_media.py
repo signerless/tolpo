@@ -611,7 +611,7 @@ async def test_a_recording_is_played_back_with_the_request_a_real_camera_answers
     assert got == [ts(2, 0x11), ts(1, 0x22)]  # the notice between the response and the video did not matter
     (request,) = camera.requests
     playback = dict(request["params"]["playback"])
-    assert isinstance(playback.pop("client_id"), int)
+    assert 1 <= playback.pop("client_id") <= 200
     assert playback == {"scale": "1/1", "start_time": "1760000000", "end_time": "1760000002"}
     assert request["params"]["method"] == "get" and set(request["params"]) == {"playback", "method"}
     assert (camera.logins, camera.failed_logins) == (1, 0)
@@ -649,3 +649,18 @@ async def test_a_playback_can_be_cut_short_and_lets_the_camera_go():
         await feed.aclose()
         await asyncio.wait_for(camera.disconnected.wait(), 5)
     assert first == ts(1, 1) and camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]
+
+
+def test_client_ids_stay_where_a_real_camera_accepts_them():
+    """Checked on a C465: video comes for ids up to 255 and does not for 65535 or more."""
+    assert {media.client_id() for _ in range(2000)} <= set(range(1, 201))
+
+
+@pytest.mark.anyio
+async def test_opening_a_playback_stops_at_the_first_video_and_lets_the_camera_go():
+    async with FakeCamera(PASSWORD, [ts(1, i) for i in range(1, 30)]) as camera:
+        await media.open_playback("127.0.0.1", PASSWORD, 1760000000, port=camera.port)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    (request,) = camera.requests
+    assert request["params"]["playback"]["start_time"] == "1760000000" and request["params"]["playback"]["end_time"] == "1760000001"
+    assert camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]
