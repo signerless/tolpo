@@ -116,6 +116,7 @@ hidden fields, text flattening and bounds, coordinate bounds, LED schedule valid
 validation, update window validation, local file validation, camera privacy exclusion and refresh
 after writes. Each mutation was checked with diff. The original source stayed unchanged.
 
-The offline suite excludes `tests/test_media.py`, `tests/test_pictures.py` and the existing
-`test_real_ffmpeg_failure_names_no_password` socket test. The last test requires a localhost
-connection that the Codex sandbox blocks. The remaining snapshot tests still run.
+A review broke these rules again: the firmware install and auto-update levels, the install
+confirmation and version check, the diagnostics allow-list, release note flattening, the camera
+exclusion in room power, corrupt-file handling and the 0600 file mode. A test failed each time.
+The whole suite passes, including the socket tests.
