@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="#8B949E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Motion sensor">
+  <title>Motion sensor</title>
+  <rect x="9" y="9" width="30" height="30" rx="10"/>
+  <circle cx="24" cy="22" r="7"/>
+  <circle cx="24" cy="22" r="3" fill="#F59E0B" stroke="none"/>
+  <circle cx="24" cy="33" r="1.8" fill="#8B949E" stroke="none"/>
+</svg>

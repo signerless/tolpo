@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="#8B949E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Temperature and humidity sensor">
+  <title>Temperature and humidity sensor</title>
+  <path d="M19 9a5 5 0 0 1 10 0v17.5a9 9 0 1 1-10 0z"/>
+  <path d="M24 15v19" stroke="#F59E0B"/><circle cx="24" cy="35" r="4" fill="#F59E0B" stroke="none"/>
+</svg>

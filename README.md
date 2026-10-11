@@ -41,6 +41,32 @@ It ships two interfaces over the same core:
   blocked on a slow hub.
 - **Tested.** A full suite runs against simulated devices, so it needs no hardware.
 
+## Supported devices
+
+tolpo works with whatever [python-kasa](https://github.com/python-kasa/python-kasa) can talk to, so the list is
+longer than the hardware we own. The table keeps two things apart: what we have run against real devices, and
+what python-kasa documents as supported but we have not tried.
+
+| | Device | Tested here | Documented by python-kasa, not tried here | What an agent gets |
+|---|---|---|---|---|
+| <img src="assets/devices/light.svg" width="36" alt="Light bulb"> | Color bulbs | L430C | L430P, L530B, L530E, L530EA, L535E | State, brightness, white temperature and color |
+| <img src="assets/devices/plug.svg" width="36" alt="Smart plug"> | Smart plugs | P115 | P110, P110M | State, plus power, voltage and current readings |
+| <img src="assets/devices/hub.svg" width="36" alt="Hub"> | Hubs | H200 | H100, and S200B and S200D buttons paired to a hub | The sensors paired to it show up as devices of their own. Its alarm and pairing stay blocked |
+| <img src="assets/devices/contact.svg" width="36" alt="Door and window sensor"> | Door and window sensors | T110 |  | Open or closed, low-battery flag |
+| <img src="assets/devices/climate.svg" width="36" alt="Temperature and humidity sensor"> | Temperature and humidity sensors | T310 | T315 (the one with a display) | Temperature, humidity, low-battery flag |
+| <img src="assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
+| <img src="assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
+| <img src="assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Read-only, no video |
+| <img src="assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. Read-only |
+
+The C610 and the C465 are not on python-kasa's list yet, but both connected fine. The C465 needs the small
+certificate fix in `compat.py`. The full upstream list is in
+[python-kasa's SUPPORTED.md](https://github.com/python-kasa/python-kasa/blob/master/SUPPORTED.md).
+
+A model that is not listed may still work, because tolpo hands the device to python-kasa and shows whatever it
+reports. Run `tolpo scan` to find out. If a device works or does not, tell us through a
+[device support issue](https://github.com/signerless/tolpo/issues/new?template=device_support.yml) so the table can improve.
+
 ## Requirements
 
 - Python 3.11 or newer
@@ -216,7 +242,7 @@ src/tolpo/
   cli.py         serve / mcp / scan entry points
 tests/           full suite against simulated devices
 docs/protocols.md  how Tapo devices talk on the local network
-assets/          logo and social preview
+assets/          logo, device icons and social preview
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, [docs/protocols.md](docs/protocols.md) for the protocol notes and

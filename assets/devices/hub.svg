@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="#8B949E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Hub">
+  <title>Hub</title>
+  <rect x="8" y="9" width="32" height="31" rx="8"/>
+  <g fill="#8B949E" stroke="none"><circle cx="18" cy="18" r="1.7"/><circle cx="24" cy="18" r="1.7"/><circle cx="30" cy="18" r="1.7"/>
+  <circle cx="18" cy="24" r="1.7"/><circle cx="24" cy="24" r="1.7"/><circle cx="30" cy="24" r="1.7"/>
+  <circle cx="18" cy="30" r="1.7"/><circle cx="24" cy="30" r="1.7"/><circle cx="30" cy="30" r="1.7"/></g>
+  <circle cx="14" cy="36" r="2.2" fill="#F59E0B" stroke="none"/>
+</svg>
