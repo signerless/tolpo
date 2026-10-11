@@ -63,7 +63,7 @@ P115_DEVICE_INFO = {
 }
 P115_PRIVATE = ("fake-", "192.0.2.10", "123456", "456789", "00-00-5E", "UHJpdmF0", "Private", "en_US")
 EXTRA_CASES = [
-    ("plug_default_state", {}, "get_device_info", {}),
+    ("plug_settings", {"section": "default_state"}, "get_device_info", {}),
     ("plug_default_state_set", {"mode": "always_off"}, "set_device_info", {"default_states": {"type": "custom", "state": {"on": False}}}),
     ("plug_energy_usage", {}, "get_energy_usage", {}),
     ("plug_energy_history", {"series": "energy", "start_timestamp": 0, "end_timestamp": 3600, "interval": 60},
@@ -72,24 +72,24 @@ EXTRA_CASES = [
      "get_energy_data_mwh", {"start_timestamp": 0, "end_timestamp": 86400, "interval": 1440}),
     ("plug_energy_history", {"series": "power", "start_timestamp": 0, "end_timestamp": 300, "interval": 5},
      "get_power_data", {"start_timestamp": 0, "end_timestamp": 300, "interval": 5}),
-    ("plug_electricity_price", {}, "get_electricity_price_config", {}),
+    ("plug_settings", {"section": "price"}, "get_electricity_price_config", {}),
     ("plug_electricity_price_set", {"constant_price": 40}, "set_electricity_price_config", {"type": "constant", "constant_price": 40}),
     ("plug_energy_clear", {"confirm": "clear_energy_data desk-lamp"}, "clear_energy_data", {}),
-    ("plug_auto_off", {}, "get_auto_off_config", {}),
+    ("plug_settings", {"section": "auto_off"}, "get_auto_off_config", {}),
     ("plug_auto_off_cancel", {"confirm": "cancel_auto_off desk-lamp"}, "cancel_auto_off", {}),
-    ("plug_protection", {}, "get_device_info", {}),
-    ("plug_protection", {"section": "charge_guard"}, "get_charging_protect", {}),
-    ("plug_protection", {"section": "power"}, "get_protection_power", {}),
-    ("plug_protection", {"section": "max_power"}, "get_max_power", {}),
+    ("plug_settings", {}, "get_device_info", {}),
+    ("plug_settings", {"section": "charge_guard"}, "get_charging_protect", {}),
+    ("plug_settings", {"section": "power_protection"}, "get_protection_power", {}),
+    ("plug_settings", {"section": "max_power"}, "get_max_power", {}),
     ("plug_identity_set", {"name": "New Name", "icon": "plug"}, "set_device_info", {"nickname": "TmV3IE5hbWU=", "avatar": "plug"}),
     ("plug_location_set", {"latitude": 12.3456, "longitude": -45.6789}, "set_device_info", {"latitude": 123456, "longitude": -456789}),
-    ("plug_runtime", {}, "get_device_usage", {}),
+    ("plug_settings", {"section": "runtime"}, "get_device_usage", {}),
     *(("switch_settings", {"section": section}, method, {}) for section, (method, _) in plugs.HARDWARE_READS.items()),
     ("switch_delay_off_set", {"enabled": True, "seconds": 60}, "set_delay_action_info", {"enabled": True, "state": {"on": False}, "time": 60}),
     ("switch_double_click_set", {"enabled": True}, "set_double_click_info", {"enable": True, "interval": 500}),
     ("switch_calibration_set", {"minimum": 10, "maximum": 100, "curve_type": 1}, "set_calibrate_brightness", {"min_threshold": 10, "max_threshold": 100, "curve_type": 1}),
     ("switch_low_power_set", {"enabled": True}, "set_device_info", {"low_power_mode": 1}),
-    ("plug_led", {}, "get_led_info", {}),
+    ("plug_settings", {"section": "led"}, "get_led_info", {}),
     ("plug_led_set", {"mode": "never"}, "set_led_info", {"led_rule": "never", "led_status": False, "night_mode": {
         "start_time": 1130, "end_time": 471, "night_mode_type": "sunrise_sunset", "sunrise_offset": 0, "sunset_offset": 0}}),
     ("plug_led_set", {"mode": "night_mode", "start": "22:00", "end": "07:30"}, "set_led_info",
@@ -348,7 +348,7 @@ async def test_history_oversized_or_invalid_response_is_reported(make_house):
     (plugs.low_power, (1,)),
     (plugs.led_set, ("bad",)), (plugs.led_set, ("never", "10:00", "11:00")),
     (plugs.led_set, ("night_mode",)), (plugs.led_set, ("night_mode", "10:00", "10:00")),
-    (plugs.hardware, ("bad",)), (plugs.protection, ("bad",)),
+    (plugs.hardware, ("bad",)), (plugs.settings, ("bad",)),
 ])
 async def test_bad_setting_inputs_never_reach_wire(make_house, fn, args):
     reg, caller, _ = make_house(tier=4, extra=[wall_switch()])
@@ -421,7 +421,7 @@ async def test_runtime_protection_hardware_and_price_allowlists(make_house):
         assert "secret" not in str(out)
         assert all(v is not None and v != "" and v != [] and v != {} for v in out.values())
     caller.respond("get_device_info", {"overcurrent_status": "overcurrent\n", "charging_status": "normal", **secret})
-    assert await plugs.protection(reg, caller, "desk-lamp") == {"device": "desk-lamp", "overcurrent_status": "overcurrent", "charging_status": "normal"}
+    assert await plugs.settings(reg, caller, "desk-lamp") == {"device": "desk-lamp", "overcurrent_status": "overcurrent", "charging_status": "normal"}
 
 
 async def test_p115_read_fakes_match_captured_envelopes(make_house):
@@ -506,9 +506,21 @@ async def test_paging_stops_on_a_malformed_sum(make_house):
 
 async def test_p115_device_info_reads_leak_nothing_private(make_house):
     reg, caller, _ = make_house(tier=0, responses={"get_device_info": P115_DEVICE_INFO})
-    assert await plugs.protection(reg, caller, "desk-lamp") == {
+    assert await plugs.settings(reg, caller, "desk-lamp") == {
         "device": "desk-lamp", "auto_off_remain_time": 0, "auto_off_status": "off", "charging_status": "normal",
         "overcurrent_status": "normal", "power_protection_status": "normal"}
-    assert await plugs.default_state(reg, caller, "desk-lamp") == {"device": "desk-lamp", "default_states": {"type": "last_states"}}
-    for out in (await plugs.protection(reg, caller, "desk-lamp"), await plugs.default_state(reg, caller, "desk-lamp")):
+    assert await plugs.settings(reg, caller, "desk-lamp", "default_state") == {"device": "desk-lamp", "default_states": {"type": "last_states"}}
+    for out in (await plugs.settings(reg, caller, "desk-lamp"), await plugs.settings(reg, caller, "desk-lamp", "default_state")):
         assert not any(private in str(out) for private in P115_PRIVATE)
+
+
+async def test_plug_settings_sections_cover_every_read(make_house, mcp):
+    reg, caller, _ = make_house(tier=0, responses=RULE_RESPONSES)
+    async with mcp(reg, caller) as client:
+        names = {t.name for t in (await client.list_tools()).tools}
+        assert {"plug_default_state", "plug_auto_off", "plug_protection", "plug_runtime", "plug_led",
+                "plug_electricity_price"}.isdisjoint(names)
+        assert len([n for n in names if n.startswith(("plug_", "switch_"))]) == 21
+        bad = await client.call_tool("plug_settings", {"device": "desk-lamp", "section": "state"})
+    assert bad.is_error and caller.sent == []
+    assert set(plugs.PLUG_READS) | {"default_state"} == set(plugs.PlugSection.__args__)

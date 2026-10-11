@@ -11,25 +11,22 @@ Timers, schedules and Away Mode can energize a load while nobody watches.
 - `plug_away_set`: Add or replace a random power window. Windows may cross midnight.
 - `plug_rule_delete`: Delete one rule by id. Does not delete other rules.
 - `plug_rule_enable`: Enable or disable one rule by id, or all schedules or Away Mode rules.
-- `plug_default_state`: Read one socket's power-loss default and reported choices.
+- `plug_settings`: Read one setting or status. Sections: `status` (overcurrent, overheat, protection trips, charging,
+  running auto-off timer), `default_state`, `auto_off`, `charge_guard`, `power_protection`, `max_power`, `runtime`
+  (minutes on today and over 7 and 30 days), `led` and `price`. Level 0.
 - `plug_default_state_set`: Set last state, always on, always off or a reported toggle choice. Level 2.
 - `plug_energy_usage`: Read energy, generation, runtime, cost and savings figures in their native structure.
 - `plug_energy_history`: Read one page of energy or power history. Includes returned range timestamps.
-- `plug_electricity_price`: Read constant or seasonal time-of-use electricity pricing.
 - `plug_electricity_price_set`: Set a constant price in the device's integer scale. Level 2. UNVERIFIED price scale.
 - `plug_energy_clear`: Permanently clear energy statistics. Level 3. Requires `clear_energy_data <device id>`.
-- `plug_auto_off`: Read the auto-off enable flag and delay in minutes.
 - `plug_auto_off_cancel`: Cancel the running timer. Level 3. Requires `cancel_auto_off <device id>`.
-- `plug_protection`: Poll safety state, or read Charge Guard, power protection or maximum power. Level 0.
 - `plug_identity_set`: Rename a device or socket, or change its icon. Level 2.
 - `plug_location_set`: Store latitude and longitude without returning coordinates. Level 2. UNVERIFIED write scale.
-- `plug_runtime`: Read minutes on today and over the past 7 and 30 days.
 - `switch_settings`: Read state, delay, calibration, button actions, double click, sleep interval or LED settings.
 - `switch_delay_off_set`: Configure delayed shut-off with the candidate v1 shape. Level 2. UNVERIFIED.
 - `switch_double_click_set`: Enable double click and set its recognition interval. Level 2. UNVERIFIED unit and limits.
 - `switch_calibration_set`: Set calibration thresholds and an optional curve id. Level 2. UNVERIFIED units and curve ids.
 - `switch_low_power_set`: Set normal or low-power mode if the device reports the setting. Level 2. UNVERIFIED write.
-- `plug_led`: Read LED state and its night-mode window.
 - `plug_led_set`: Set the LED mode or a fixed night window. Level 2. UNVERIFIED fixed-window enum.
 
 Times are device-local, in strict `HH:MM` form. Weekdays run from Sunday 0 to Saturday 6.
@@ -48,7 +45,7 @@ Cost arrays retain their device ordering. Their period mapping, currency and pri
 The price setter replaces time-of-use mode. Time-of-use writes are deferred because season ranges and slot encoding
 are not verified. Reads keep summer and winter prices, periods and weekday/weekend slot arrays.
 Protection polling returns a single current sample. It does not subscribe to push alerts or reset a tripped protection.
-Select `charge_guard`, `power` or `max_power` only when the model supports the corresponding read.
+Select `charge_guard`, `power_protection` or `max_power` only when the model supports the corresponding read.
 Cancelling auto-off may leave the load on longer. It needs level 3 and the exact confirmation phrase.
 Names are encoded as python-kasa expects. Icon ids are model-specific.
 UNVERIFIED: location is written in ten-thousandths of a degree, the scale python-kasa reads. No write was captured.

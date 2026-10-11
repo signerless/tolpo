@@ -114,12 +114,24 @@ HARDWARE_READS = {
 }
 
 
-async def protection(registry, caller, device, section="state"):
-    choices = {"state": ("get_device_info", STATUS_FIELDS), "charge_guard": ("get_charging_protect", CHARGE_FIELDS),
-               "power": ("get_protection_power", POWER_FIELDS), "max_power": ("get_max_power", POWER_FIELDS)}
-    if section not in choices:
-        raise ValueError("protection section must be state, charge_guard, power or max_power")
-    method, fields = choices[section]
+PlugSection = Literal["status", "default_state", "auto_off", "charge_guard", "power_protection", "max_power",
+                      "runtime", "led", "price"]
+PLUG_READS = {
+    "status": ("get_device_info", STATUS_FIELDS), "auto_off": ("get_auto_off_config", AUTO_FIELDS),
+    "charge_guard": ("get_charging_protect", CHARGE_FIELDS), "power_protection": ("get_protection_power", POWER_FIELDS),
+    "max_power": ("get_max_power", POWER_FIELDS), "runtime": ("get_device_usage", RUNTIME_FIELDS),
+    "led": ("get_led_info", LED_FIELDS), "price": ("get_electricity_price_config", PRICE_FIELDS),
+}
+
+
+async def settings(registry, caller, device, section="status"):
+    """One read for every plug setting and status, so the agent sees one tool instead of seven."""
+    if section == "default_state":
+        return await default_state(registry, caller, device)
+    if section not in PLUG_READS:
+        raise ValueError("section must be status, default_state, auto_off, charge_guard, power_protection, "
+                         "max_power, runtime, led or price")
+    method, fields = PLUG_READS[section]
     return await read(registry, caller, device, method, fields)
 
 
@@ -532,10 +544,17 @@ def tools(ctx):
         """Enable or disable one rule. Omit the id to change all schedules or all Away Mode rules."""
         return await run(enable_rule, device, kind, enabled, rule_id)
 
-    @ctx.tool(title="Plug power-loss default")
-    async def plug_default_state(device: Device) -> dict[str, Any]:
-        """Read the socket's power-loss default and supported choices."""
-        return await run(default_state, device)
+    @ctx.tool(title="Plug settings and status")
+    async def plug_settings(device: Device,
+                            section: Annotated[PlugSection, Field(description="status, default_state, auto_off, charge_guard, "
+                                                                  "power_protection, max_power, runtime, led or price")] = "status") -> dict[str, Any]:
+        """Read one setting or status of a plug, strip socket or switch.
+        status: overcurrent, overheat, protection trips, charging state and the running auto-off timer. It is a
+        polling read; there is no push alert. default_state: power-loss default and reported choices. auto_off:
+        enable flag and delay in minutes. charge_guard, power_protection, max_power: protection configuration, on
+        models that support it. runtime: minutes on today and over the past 7 and 30 days. led: indicator LED and its
+        night window. price: constant or seasonal electricity price; currency and price scaling are not established."""
+        return await run(settings, device, section)
 
     @ctx.tool(title="Set plug power-loss default", tier=Tier.SETTING)
     async def plug_default_state_set(device: Device,
@@ -559,15 +578,11 @@ def tools(ctx):
         """Read one bounded history page, including its timestamps. Request the next range explicitly. At most 512 intervals."""
         return await run(energy_history, device, series, start_timestamp, end_timestamp, interval, precision)
 
-    @ctx.tool(title="Plug electricity price")
-    async def plug_electricity_price(device: Device) -> dict[str, Any]:
-        """Read constant or seasonal time-of-use price configuration. Currency and price scaling are not established."""
-        return await run(read, device, "get_electricity_price_config", PRICE_FIELDS)
-
     @ctx.tool(title="Set plug electricity price", tier=Tier.SETTING)
     async def plug_electricity_price_set(device: Device,
                                          constant_price: Annotated[int, Field(description="Nonnegative integer in the device's native price scale", strict=True)]) -> dict[str, Any]:
-        """Set a constant price. Replaces time-of-use mode. UNVERIFIED price scaling; do not interpret as a currency amount."""
+        """Set a constant price. Replaces time-of-use mode. UNVERIFIED price scaling; do not interpret as a currency amount.
+        Read the current price with plug_settings section price."""
         return await run(set_price, device, constant_price)
 
     # UNVERIFIED: clear_energy_data and cancel_auto_off are sent without parameters. The audit names the
@@ -578,22 +593,11 @@ def tools(ctx):
         """Permanently erase stored energy statistics. Requires the confirmation phrase naming this device."""
         return await run(write, device, "clear_energy_data", confirm=confirm)
 
-    @ctx.tool(title="Plug auto-off configuration")
-    async def plug_auto_off(device: Device) -> dict[str, Any]:
-        """Read automatic shut-off settings. Use plug_protection state for the running timer's remaining seconds."""
-        return await run(read, device, "get_auto_off_config", AUTO_FIELDS)
-
     @ctx.tool(title="Cancel plug auto-off", tier=Tier.SECURITY)
     async def plug_auto_off_cancel(device: Device,
                                    confirm: Annotated[str | None, Field(description="Exact phrase: cancel_auto_off <device id>")] = None) -> dict[str, Any]:
         """Cancel a running automatic shut-off. The load may stay on longer. Requires confirmation."""
         return await run(write, device, "cancel_auto_off", confirm=confirm)
-
-    @ctx.tool(title="Plug protection polling read")
-    async def plug_protection(device: Device,
-                               section: Annotated[Literal["state", "charge_guard", "power", "max_power"], Field(description="Read current status or one protection configuration")] = "state") -> dict[str, Any]:
-        """Poll overcurrent, overheat, protection trips and charging state, or read Charge Guard. No cloud push subscription."""
-        return await run(protection, device, section)
 
     @ctx.tool(title="Rename plug or select icon", tier=Tier.SETTING)
     async def plug_identity_set(device: Device,
@@ -608,11 +612,6 @@ def tools(ctx):
                                 longitude: Annotated[float, Field(description="Longitude in degrees, -180 to 180", strict=True)]) -> dict[str, Any]:
         """Store a location on one plug, switch or socket. Does not return coordinates. UNVERIFIED write scale. Region and clock are left to their own tools."""
         return await run(location, device, latitude, longitude)
-
-    @ctx.tool(title="Plug runtime counters")
-    async def plug_runtime(device: Device) -> dict[str, Any]:
-        """Read minutes the load was on today and over the past 7 and 30 days."""
-        return await run(read, device, "get_device_usage", RUNTIME_FIELDS)
 
     @ctx.tool(title="Switch and dimmer hardware settings")
     async def switch_settings(device: Device,
@@ -647,11 +646,6 @@ def tools(ctx):
                                     enabled: Annotated[bool, Field(description="True for low-power mode, false for normal mode", strict=True)]) -> dict[str, Any]:
         """Set low-power mode on hardware that reports this setting. UNVERIFIED write of low_power_mode 1 or 0."""
         return await run(low_power, device, enabled)
-
-    @ctx.tool(title="Plug LED setting")
-    async def plug_led(device: Device) -> dict[str, Any]:
-        """Read the indicator LED and its night-mode window on a plug, socket or switch."""
-        return await run(read, device, "get_led_info", LED_FIELDS)
 
     @ctx.tool(title="Plug or switch LED night window", tier=Tier.SETTING)
     async def plug_led_set(device: Device,
