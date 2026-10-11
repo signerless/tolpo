@@ -28,6 +28,14 @@ def stable(value):
 
 
 async def snapshot(provider, target, protected):
+    try:
+        return await _snapshot(provider, target, protected)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        # Router output is untrusted. Refuse odd shapes without echoing them.
+        raise NetworkError("Unsupported router response shape; firewall plan refused") from None
+
+
+async def _snapshot(provider, target, protected):
     rules = await provider.state()
     if not isinstance(rules.get("nftables"), list):
         raise NetworkError("Unsupported nftables response shape")
