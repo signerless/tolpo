@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fnmatch
+import hashlib
 import ipaddress
 import json
 import logging
@@ -33,6 +34,15 @@ BOOT_GRACE = 15.0  # at startup, stop waiting for slow devices after this long a
 RETRY_DELAYS = (5.0, 15.0, 45.0)  # seconds between retries of hosts we know but could not reach
 CACHE_MAX_AGE = 30 * 24 * 3600  # forget a remembered host only after this long without seeing it
 LOGIN_COOLDOWN = 300.0  # after a camera rejects the login, leave it alone this long: repeated failures can lock it out
+
+
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+SLUGS_MAX = 4096  # remembered slugs: a house has dozens of devices, so more than this in the file is damage
+
+
+def device_key(device: Device) -> str:
+    """A short name for a device that is safe to store in a file: a hash of its id, never the id itself."""
+    return hashlib.sha256(str(device.device_id).encode()).hexdigest()[:16]
 
 
 def describe_failure(exc: KasaException) -> str:
@@ -145,6 +155,8 @@ class Registry:
         self._cache = Path(cfg.cache_file).expanduser() if cfg.cache_file else None
         # host -> {"seen", "name", "model"}. Never shrinks because one scan missed a device.
         self._known: dict[str, dict[str, Any]] = self._load_cache()
+        # device key -> slug. A device keeps the short id it was first given, also after a rename or a restart.
+        self._slugs: dict[str, str] = self._load_slugs()
         self.retry_delays = RETRY_DELAYS
         self.boot_grace = BOOT_GRACE
         self._connecting: set[str] = set()  # hosts with a connection attempt in flight
@@ -371,6 +383,23 @@ class Registry:
             return {}
         return {h: info for h, info in raw.items() if isinstance(info, dict)}
 
+    def _load_slugs(self) -> dict[str, str]:
+        """The slugs given in earlier runs. Anything that does not look like one is ignored, never trusted."""
+        if not self._cache:
+            return {}
+        try:
+            raw = json.loads(self._cache.read_text()).get("slugs", {})
+        except (OSError, ValueError, AttributeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        out, used = {}, set()
+        for key, slug in list(raw.items())[:SLUGS_MAX]:
+            if isinstance(key, str) and isinstance(slug, str) and _SLUG.fullmatch(slug) and len(slug) <= 64 and slug not in used:
+                out[key] = slug
+                used.add(slug)
+        return out
+
     def _save_cache(self) -> None:
         if not self._cache:
             return
@@ -378,7 +407,7 @@ class Registry:
         self._known = {h: i for h, i in self._known.items() if i.get("seen", 0) >= cutoff}
         try:
             self._cache.parent.mkdir(parents=True, exist_ok=True)
-            self._cache.write_text(json.dumps({"version": 2, "hosts": self._known}))
+            self._cache.write_text(json.dumps({"version": 2, "hosts": self._known, "slugs": self._slugs}))
         except OSError as exc:
             log.warning("could not save the host cache: %s", exc)
 
@@ -411,11 +440,17 @@ class Registry:
             await device.disconnect()
 
     def _unique_slug(self, device: Device) -> str:
+        key, in_use = device_key(device), {e.slug for e in self._entries.values()}
+        kept = self._slugs.get(key)
+        if kept and kept not in in_use:
+            return kept
+        # A device not seen yet this run may still own a slug from an earlier run: leave those for their owners.
+        taken = in_use | set(self._slugs.values())
         base = re.sub(r"[^a-z0-9]+", "-", (device.alias or device.model or "device").lower()).strip("-") or "device"
-        taken = {e.slug for e in self._entries.values()}
         slug, n = base, 2
         while slug in taken:
             slug, n = f"{base}-{n}", n + 1
+        self._slugs[key] = slug
         return slug
 
     # ---- lookup ----------------------------------------------------------
