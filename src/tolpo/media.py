@@ -481,12 +481,14 @@ OPEN_BYTES = 1024 * 1024  # how much video a playback must deliver before a down
 OPEN_SECONDS = 6.0
 
 
-async def open_playback(host: str, password: str, start: int, *, port: int = MEDIA_PORT, psk_port: int = PSK_PORT) -> None:
+async def open_playback(
+    host: str, password: str, start: int, *, port: int = MEDIA_PORT, psk_port: int = PSK_PORT, client: int | None = None,
+) -> None:
     """Play a recording for a moment. Checked on a C465: it answers a download with a response and no video until a
     playback has been opened, and playing only the first part was not enough, while about a megabyte (four seconds of
-    video) was: after that the downloads work for a while."""
+    video) was: after that the downloads work for a while. The download that follows uses the same `client` id."""
     got = 0
-    feed = playback_chunks(host, password, start, start + 1, port=port, psk_port=psk_port)
+    feed = playback_chunks(host, password, start, start + 1, port=port, psk_port=psk_port, client=client)
 
     async def play() -> None:
         nonlocal got
@@ -505,7 +507,7 @@ async def open_playback(host: str, password: str, start: int, *, port: int = MED
 
 async def playback_chunks(
     host: str, password: str, start: int, end: int, *, port: int = MEDIA_PORT, timeout: float = CONNECT_TIMEOUT,
-    psk_port: int = PSK_PORT,
+    psk_port: int = PSK_PORT, client: int | None = None,
 ) -> AsyncIterator[bytes]:
     """Yield decrypted MPEG-TS of a recording from the camera's memory card, from `start` on. Checked on a C465: the
     camera answers, then streams faster than real time, and it ignores `end` and plays on into the next recordings, so
@@ -514,7 +516,7 @@ async def playback_chunks(
     session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout, what="the recording")
     await session.open()
     try:
-        request = {"playback": {"client_id": client_id(), "scale": "1/1", "start_time": str(start), "end_time": str(end)}, "method": "get"}
+        request = {"playback": {"client_id": client if client is not None else client_id(), "scale": "1/1", "start_time": str(start), "end_time": str(end)}, "method": "get"}
         await session.request(request, {"X-Data-Window-Size": str(WINDOW_SIZE)})
         async for item in session.events(ack=True):
             if isinstance(item, Notice):

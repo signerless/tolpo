@@ -631,7 +631,9 @@ async def test_a_recording_is_copied_to_the_owners_folder_and_only_its_path_is_r
     opening, request = camera.requests[:2]  # a playback first: without one the camera sends no video for a download
     assert opening["params"]["playback"]["start_time"] == "1760000000"
     download = dict(request["params"]["download"])
-    assert 1 <= download.pop("client_id") <= 200  # checked on a C465: ids of 65535 and more get no video
+    client = download.pop("client_id")
+    assert 1 <= client <= 200  # checked on a C465: ids of 65535 and more get no video
+    assert opening["params"]["playback"]["client_id"] == client  # the same client opened the card and then downloads
     assert download == {"channels": [0], "media_type": 0, "start_time": "1760000000", "end_time": "1760000010"}
     assert request["params"]["method"] == "get"
     assert sorted(p.name for p in tmp_path.iterdir()) == [f"hallway-cam-{stamp}-10s-2.ts", f"hallway-cam-{stamp}-10s.ts"]

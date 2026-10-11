@@ -74,8 +74,8 @@ The memory card's password field (cards locked with a password report one) is ne
   so the reader stops when it has what it needs; a download of any window that is not a whole recording gets only a
   response and no video; neither needed the acknowledgements within 20 seconds of video. The client id must be small: ids
   up to 255 get video and 65535 or more do not, so tolpo uses 1 to 200. A download gets only a response until a playback
-  has been opened, so tolpo opens one (it stops at the first video) before it asks for the recording; after that, downloads
-  of any recording work.
+  has been opened, so tolpo plays the recording for about a megabyte of video (a few seconds) with the same client id, then
+  asks for the recording; a shorter or different opening did not work in the tries made.
 - Event pictures (`download` with `media_type` 2 and a `file_id`) are built but were never tried: the owner's cameras
   list events without file ids.
 
@@ -105,3 +105,11 @@ Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`
 - Whether the camera holds back data until it gets acknowledgements on long recordings, and that the polite stop changes
   nothing on a real camera.
 - The TLS detection: no camera of the owner uses TLS-PSK, so the port 28800 behavior is from the app's code only.
+
+## What was checked on real devices
+
+On 2026-10-12, on a C465 (battery) and a C225 (wired): the card status, record plan and loop recording; the list of days
+with video, the recordings of a day (video type 3 on the C465, which is the low frame rate mode) and the event list;
+a picture of a past moment (the first frame of a playback); two live pictures in a row; and a whole 21 second recording
+copied into a private folder (6.8 MB, mode 0600). The record plan and loop recording writes, and formatting a card,
+were not tried.
