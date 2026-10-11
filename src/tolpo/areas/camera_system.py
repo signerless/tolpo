@@ -240,8 +240,10 @@ async def ptz_action(registry, caller, device, action, **values):
         if not isinstance(ids, list) or not 1 <= len(ids) <= 32:
             raise BadRequest("Choose 1 to 32 preset ids")
         ids = [str(integer(i, 0, 255, "Preset id")) for i in ids]
-        presets = await _call(caller, entry, "getPresetConfig", {"preset": {"name": ["preset"]}})
-        known = _section(presets, "preset", "preset").get("id", [])
+        presets = _response_section(entry, "getPresetConfig", await _call(caller, entry, "getPresetConfig", {"preset": {"name": ["preset"]}}), "preset", "preset")
+        known = presets.get("id") if isinstance(presets, dict) else None
+        if not isinstance(known, list):
+            raise DeviceUnavailable(f"{entry.slug}: getPresetConfig returned an unexpected response shape")
         if any(i not in {str(p) for p in known} for i in ids):
             raise BadRequest("A selected preset does not exist")
         return await write(registry, caller, entry, "deletePreset", "preset", "remove_preset", {"id": ids}, {"presets_deleted": ids})
@@ -252,6 +254,9 @@ async def ptz_action(registry, caller, device, action, **values):
         point = str(integer(values["preset_id"], 0, 255, "Preset id"))
         payload = {"id": point}
         if action != "delete":
+            # No defaults: an edit without a name would silently rename the point.
+            if values.get("name") is None or values.get("wait_seconds") is None:
+                raise BadRequest("Adding or editing a patrol point needs a name and wait_seconds")
             payload.update(name=text_input(values["name"], "Point name"), wait_time=str(integer(values["wait_seconds"], 1, 3600, "Wait seconds")))
         method = {"add": "addPatrol", "edit": "editPatrol", "delete": "deletePatrol"}[action]
         return await write(registry, caller, entry, method, "patrol", f"{action}_patrol", payload, {"patrol_point": point, "action": action})
@@ -675,8 +680,8 @@ def tools(ctx):
         return await run(ptz_action, device, "patrol", enabled=enabled)
 
     @ctx.tool(title="Camera patrol point", tier=Tier.SETTING)
-    async def camera_ptz_patrol_point(device: Device, action: Annotated[Literal["add", "edit", "delete"], Field(description="Change to a patrol point")], preset_id: Annotated[int, Field(description="Viewpoint id", ge=0, le=255)], name: Annotated[str, Field(description="Point name for add or edit", max_length=64)] = "Viewpoint", wait_seconds: Annotated[int, Field(description="Wait at this point for add or edit", ge=1, le=3600)] = 30) -> dict[str, Any]:
-        """Add, edit or delete one point in a camera's patrol."""
+    async def camera_ptz_patrol_point(device: Device, action: Annotated[Literal["add", "edit", "delete"], Field(description="Change to a patrol point")], preset_id: Annotated[int, Field(description="Viewpoint id", ge=0, le=255)], name: Annotated[str | None, Field(description="Point name, required for add and edit", max_length=64)] = None, wait_seconds: Annotated[int | None, Field(description="Seconds to wait at this point, required for add and edit", ge=1, le=3600)] = None) -> dict[str, Any]:
+        """Add, edit or delete one point in a camera's patrol. Add and edit need both name and wait_seconds."""
         return await run(ptz_action, device, action, preset_id=preset_id, name=name, wait_seconds=wait_seconds)
 
     @ctx.tool(title="Camera automatic tracking", tier=Tier.SETTING)

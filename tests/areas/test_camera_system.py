@@ -89,7 +89,7 @@ async def test_compact_presets(make_house):
     assert await area.read_setting(reg, caller, "hallway-cam", "presets") == {"device": "hallway-cam", "presets": {"id": ["1"], "name": ["Desk View"]}}
 
 
-@pytest.mark.parametrize("action,values", [("save", {"name": "bad\nname"}), ("save", {"name": "a" * 65}), ("remove", {"ids": [2]}), ("remove", {"ids": []}), ("cruise", {"axis": "diagonal"}), ("calibrate", {"position": "other"}), ("patrol", {"enabled": "off"}), ("add", {"preset_id": 1, "name": "Desk", "wait_seconds": -1})])
+@pytest.mark.parametrize("action,values", [("save", {"name": "bad\nname"}), ("save", {"name": "a" * 65}), ("remove", {"ids": [2]}), ("remove", {"ids": []}), ("cruise", {"axis": "diagonal"}), ("calibrate", {"position": "other"}), ("patrol", {"enabled": "off"}), ("add", {"preset_id": 1, "name": "Desk", "wait_seconds": -1}), ("edit", {"preset_id": 1, "name": None, "wait_seconds": 30}), ("add", {"preset_id": 1, "name": "Desk", "wait_seconds": None})])
 async def test_ptz_invalid_inputs_never_write(make_house, action, values):
     reg, caller = house(make_house)
     with pytest.raises(BadRequest):
@@ -534,7 +534,7 @@ TOOLS = [
     ("camera_ptz_save_preset", {"name": "Desk"}, "addMotorPostion"),
     ("camera_ptz_delete_presets", {"ids": [1]}, "deletePreset"),
     ("camera_ptz_patrol", {"enabled": True}, "setPatrolStatus"),
-    ("camera_ptz_patrol_point", {"action": "add", "preset_id": 1}, "addPatrol"),
+    ("camera_ptz_patrol_point", {"action": "add", "preset_id": 1, "name": "Desk", "wait_seconds": 30}, "addPatrol"),
     ("camera_ptz_auto_tracking", {"enabled": True}, "setTargetTrackConfig"),
     ("camera_image_read", {"setting": "osd"}, "getOsd"),
     ("camera_image_mode", {"setting": "style", "value": "bright"}, "setImageStyleConfig"),
@@ -1217,3 +1217,12 @@ async def test_exposure_tools_warn_the_agent(make_house, mcp):
     assert "level 4" in tools["camera_system_compatibility"].description
     assert area.WRITES["setThirdPartyCompatibility"][0] == area.Tier.LIFECYCLE
     assert area.WRITES["setUpnpInfo"][0] >= area.Tier.SECURITY
+
+
+@pytest.mark.parametrize("presets", [{"preset": {"preset": ["1"]}}, {"preset": {"preset": {"id": "1"}}}, {"preset": {}}])
+async def test_preset_delete_rejects_odd_preset_shapes(make_house, presets):
+    reg, caller = house(make_house)
+    caller.respond("getPresetConfig", presets)
+    with pytest.raises(DeviceUnavailable, match="getPresetConfig returned an unexpected response shape"):
+        await area.ptz_action(reg, caller, "hallway-cam", "remove", ids=[1])
+    assert "deletePreset" not in caller.methods_sent()
