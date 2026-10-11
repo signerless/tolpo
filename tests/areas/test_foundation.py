@@ -1,5 +1,6 @@
 """The shared base every area module stands on: declared methods with levels, the guarded caller, the plug-in loader."""
 
+import json
 import types
 from types import SimpleNamespace
 from typing import Any
@@ -277,7 +278,7 @@ async def test_the_owner_can_switch_areas_off_and_an_agent_can_see_what_exists(m
         listing = (await client.call_tool("tolpo_areas", {})).structured_content
     assert "tolpo_areas" in names and "demo_read_tool" not in names
     assert listing["level"] == 1
-    assert listing["areas"] == [{"area": "demo", "on": False, "about": "", "tools": []}]  # off, and the overview does not list itself
+    assert listing["areas"] == [{"area": "demo", "on": False, "why": "chosen in the config", "about": "", "tools": []}]  # off; the overview lists no one else
     reg, caller, _ = make_house()  # all on
     async with mcp(reg, caller) as client:
         listing = (await client.call_tool("tolpo_areas", {})).structured_content
@@ -294,3 +295,48 @@ def test_the_areas_setting_comes_from_the_file_and_the_environment(tmp_path, mon
     assert load_config(str(path)).areas == ("cameras", "hub")
     monkeypatch.setenv("TOLPO_AREAS", "")
     assert load_config(str(path)).areas == ()
+
+
+# ---- which areas are on by default ----------------------------------------------------------------------
+
+
+def cache(tmp_path, *models):
+    path = tmp_path / "hosts.json"
+    path.write_text(json.dumps({"hosts": {f"192.0.2.{i}": {"model": m, "name": "x"} for i, m in enumerate(models, 1)}}))
+    return str(path)
+
+
+def decide(tmp_path, *models, areas_setting=()):
+    cfg = Config(email="a", password="b", cache_file=cache(tmp_path, *models) if models else str(tmp_path / "none.json"), areas=areas_setting)
+    names = ["lights", "plugs", "hub", "doorbell", "camera_media", "vacuum", "lock", "automation", "overview"]
+    return {name: on for name, (on, _) in areas.enabled_areas(names, cfg).items()}
+
+
+def test_by_default_only_the_areas_for_devices_the_owner_has_are_on(tmp_path):
+    on = decide(tmp_path, "L430C", "P115", "H200", "C225")
+    assert on == {"lights": True, "plugs": True, "hub": True, "doorbell": True, "camera_media": True, "vacuum": False, "lock": False,
+                  "automation": True, "overview": True}
+
+
+def test_a_hub_brings_its_sensors_and_a_vacuum_turns_its_area_on(tmp_path):
+    assert decide(tmp_path, "H200")["doorbell"] is True
+    on = decide(tmp_path, "RV30", "L530")
+    assert on["vacuum"] is True and on["plugs"] is False and on["lights"] is True and on["automation"] is True
+
+
+def test_when_nothing_is_known_or_a_model_is_not_recognized_nothing_is_hidden(tmp_path):
+    assert all(decide(tmp_path).values())  # no cache yet
+    assert all(decide(tmp_path, "L430C", "ZX9000").values())  # a model we cannot place
+
+
+def test_the_owners_choice_beats_the_guess(tmp_path):
+    on = decide(tmp_path, "L430C", areas_setting=("vacuum", "lock"))
+    assert on["vacuum"] is True and on["lock"] is True and on["lights"] is False and on["overview"] is True
+    assert all(decide(tmp_path, "L430C", areas_setting=("all",)).values())
+
+
+@pytest.mark.parametrize("model, kind", [("L430C", "light"), ("P115", "plug"), ("S505", "switch"), ("H200", "hub"), ("C225", "camera"),
+                                          ("TC70", "camera"), ("D230", "doorbell"), ("DL110", "lock"), ("RV30 Max", "vacuum"), ("KE100", "valve"),
+                                          ("T310", "sensor"), ("Z1", None)])
+def test_models_map_to_kinds(model, kind):
+    assert areas.kind_of_model(model) == kind

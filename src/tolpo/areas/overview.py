@@ -9,10 +9,11 @@ def tools(ctx):
     @ctx.tool(title="Areas")
     async def tolpo_areas() -> dict[str, Any]:
         """List the parts of tolpo (areas such as lights, plugs, cameras), whether each is on, and the tools each one offers.
-        Use it to find out what you can do before guessing a tool name. An area that is off was not enabled by the owner."""
+        Use it to find out what you can do before guessing a tool name. An area is off when the owner has no such device
+        or did not choose it."""
         return {
             "areas": [
-                {"area": name, "on": info["enabled"], "about": info["summary"], "tools": info["tools"]}
+                {"area": name, "on": info["enabled"], "why": info["why"], "about": info["summary"], "tools": info["tools"]}
                 for name, info in sorted(ctx.catalog.items())
                 if name != "overview"
             ],
