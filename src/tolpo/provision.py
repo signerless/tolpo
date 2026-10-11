@@ -255,6 +255,10 @@ class Lifecycle(Protocol):
     async def invoke(self, entry: Entry, operation: str, **params: Any) -> Any: ...
 
 
+def _same(a, b):
+    return isinstance(a, str) and isinstance(b, str) and hmac.compare_digest(a.encode(), b.encode())
+
+
 class KasaLifecycle:
     """The small fakeable interface uses public kasa device and module APIs only."""
 
@@ -277,7 +281,9 @@ class KasaLifecycle:
             if entry.root is not None:
                 raise NotFound(f"{entry.slug} has no own Wi-Fi radio")
             credentials = dev.credentials
-            if credentials is None or credentials.username != params["username"] or credentials.password != params["account_password"]:
+            if credentials is None or not (
+                _same(credentials.username, params["username"]) & _same(credentials.password, params["account_password"])
+            ):
                 raise RegistryError("The device session must use the same owner's environment-supplied account")
             return await dev.wifi_join(params["ssid"], params["password"], params["keytype"])
         if operation in {"reset_factory", "reset_reboot"}:
@@ -406,6 +412,7 @@ async def wifi_scan(registry, adapter, entry):
 
 async def wifi_join(registry, adapter, entry, ssid_env, password_env, account_env, account_password_env, keytype="wpa2_psk", confirm=None):
     authorize(registry, entry, "wifi_join", confirm)
+    # "wpa2_psk" and "none" appear in python-kasa and the app. UNVERIFIED: "wpa_psk".
     if keytype not in {"wpa2_psk", "wpa_psk", "none"}:
         raise RegistryError("Unsupported Wi-Fi security type")
     ssid, password = env_value(ssid_env), env_value(password_env, empty=keytype == "none")
