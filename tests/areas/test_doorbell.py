@@ -25,7 +25,7 @@ async def test_events_are_observations_compact_and_repeatable(make_house):
     caller.respond("get_trigger_logs", {"logs": [{"id": 1, "timestamp": 102, "event": "press\n button", "params": {"mac": "SECRET"}}, {"timestamp": 99}]})
     out = await doorbell.events_recent(reg, caller, "front-bell", since=100, hub="tapo-h200")
     assert out == {"device": "front-bell", "unverified": True, "cursor": 102, "events": [{"source": "last_alarm", "timestamp": 101, "last_alarm_type": "ring press"}, {"source": "hub_trigger", "id": 1, "timestamp": 102, "event": "press button"}], "call_state": {"call_state": "idle"}}
-    assert caller.sent == [("front-bell", "getLastAlarmInfo", {"system": {"name": "last_alarm_info"}}), ("front-bell", "getCallStateInfo", {"call_manager": {"name": "call_state_info"}}), ("front-bell", "get_trigger_logs", {"start_id": 0, "page_size": 10})]
+    assert caller.sent == [("front-bell", "getLastAlarmInfo", {"system": {"name": ["last_alarm_info"]}}), ("front-bell", "getCallStateInfo", {"call_manager": {"name": ["call_state_info"]}}), ("front-bell", "get_trigger_logs", {"start_id": 0, "page_size": 10})]
     assert "events" not in await doorbell.events_recent(reg, caller, "front-bell", since=102, hub="tapo-h200")
 
 
@@ -474,3 +474,16 @@ async def test_anti_theft_is_level_3_and_needs_its_confirmation(make_house):
     assert "setAntiTheftEnable" not in caller.methods_sent()
     out = await doorbell.anti_theft(reg, caller, "front-bell", False, "setAntiTheftEnable front-bell")
     assert out["changed"] == {"anti_theft": False}
+
+
+async def test_reads_use_the_fixture_request_shape_and_reply(make_house):
+    reg, caller = ready_house(make_house)
+    # Request and reply exactly as the C225 fixture recorded them.
+    caller.respond("getLastAlarmInfo", lambda entry, params: {"system": {"last_alarm_info": {"last_alarm_time": "1791678223", "last_alarm_type": "motion"}}} if params == {"system": {"name": ["last_alarm_info"]}} else {})
+    caller.respond("get_trigger_logs", DeviceUnavailable("front-bell reported an error: Error querying device: 10.0.0.9: UNSUPPORTED_METHOD(-40106) for method: get_trigger_logs"))
+    out = await doorbell.events_recent(reg, caller, "front-bell", since=1791678000)
+    assert out["events"] == [{"source": "last_alarm", "timestamp": 1791678223, "last_alarm_type": "motion"}]
+    assert out["errors"] == [{"device": "front-bell", "method": "get_trigger_logs", "reason": "front-bell: get_trigger_logs: device does not support this method"}]
+    assert "10.0.0.9" not in str(out)
+    await doorbell.read_setting(reg, caller, "front-bell", "button_led")
+    assert caller.sent[-1] == ("front-bell", "getLedColor", {"led": {"name": ["color"]}})

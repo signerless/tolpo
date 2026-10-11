@@ -165,7 +165,8 @@ async def read_setting(registry, caller, device, setting, legacy=False):
     entry = _entry(registry, device, ["doorbell"])
     data = {}
     for method, module, section, fields in READS[setting]:
-        params = {module: {"name": section}}
+        # The camera fixtures read sections as a list: {"system": {"name": ["last_alarm_info"]}}.
+        params = {module: {"name": [section]}}
         if module == "hub_ring" or legacy and setting in ("ring", "anti_theft", "wake_up", "hub_plan"):
             params = {module: {}}
         value = _section(await _call(caller, entry, method, params), module, section)
@@ -407,7 +408,9 @@ async def _call(caller, entry, method, params=None, confirm=None):
     except DeviceUnavailable as exc:
         # Device error text can echo pairing keys or credentials. Never forward it.
         reason = "device rejected or could not complete the request"
-        if "did not answer in time" in str(exc):
+        if "UNSUPPORTED_METHOD" in str(exc) or "-40106" in str(exc):
+            reason = "device does not support this method"
+        elif "did not answer in time" in str(exc):
             reason = "device did not answer in time"
         elif "rejected the account credentials" in str(exc):
             reason = "device rejected the account credentials"
@@ -430,12 +433,15 @@ async def events_recent(registry, caller, device, since=0, limit=10, hub=None):
     if parent and parent is not entry.root:
         raise BadRequest("The selected hub is not this doorbell's parent")
     requests = [
-        (entry, "getLastAlarmInfo", {"system": {"name": "last_alarm_info"}}),
-        (entry, "getCallStateInfo", {"call_manager": {"name": "call_state_info"}}),
+        # Request and reply shapes of getLastAlarmInfo match the C225 and C610 fixtures. The D230 has no fixture for it.
+        (entry, "getLastAlarmInfo", {"system": {"name": ["last_alarm_info"]}}),
+        # UNVERIFIED: the call_manager module and call_state_info section come from the app catalog, not a fixture.
+        (entry, "getCallStateInfo", {"call_manager": {"name": ["call_state_info"]}}),
     ]
     if parent:
-        # Sensor fixtures confirm this child-scoped request. Direct H200 requests are rejected.
-        # UNVERIFIED: D230 child support and ring event types still need hardware verification.
+        # Sensor fixtures confirm this child-scoped request. Direct H200 requests are rejected (UNSUPPORTED_METHOD).
+        # UNVERIFIED: the D230 fixture lists no trigger_log component, so this read may well fail on a D230.
+        # A failure lands in "errors" and does not hide the other observations.
         requests.append((entry, "get_trigger_logs", {"start_id": 0, "page_size": limit}))
     events, errors, state = [], [], {}
     for target, method, params in requests:

@@ -36,8 +36,10 @@ Call state is a snapshot with no event timestamp. Equal-second events, older pag
 may be missed. There is no persistent queue. An agent chooses its polling interval and retains the observations.
 The parent hub is selected automatically. An explicit hub must be that doorbell's parent.
 H200 rejects direct `get_trigger_logs`. Sensor fixtures confirm child-scoped `get_trigger_logs` with `start_id` and
-`page_size`, so the doorbell child path is used instead. UNVERIFIED: whether a D230 supports that read and which
-observations change when its button is pressed. Check all three sources before and after a real D230 press behind H200.
+`page_size`, so the doorbell child path is used instead. The D230 fixture lists no `trigger_log` component, so this
+read may fail on a D230. A failure shows as "device does not support this method" under `errors`.
+`getLastAlarmInfo` uses the request and reply shape of the C225 and C610 fixtures. The D230 has no fixture for it.
+UNVERIFIED: the `getCallStateInfo` shape, and which observations change when a D230 button is pressed. Check all three sources before and after a real D230 press behind H200.
 
 Per-doorbell chime settings use the doorbell's cached address internally. No addresses, keys, passwords, setup codes or
 raw device errors are returned. Device text is shortened and flattened. Unknown response fields are discarded.
@@ -52,6 +54,7 @@ A preview passes its tone, volume and duration with `play_alarm` and does not ch
 The H200 siren is the hub's own alarm sound. Read it with `hub_alarm_config`, change it with `hub_alarm_set` and sound
 it with `hub_siren` (hub area). This area only reads the H200 tone list.
 
+Reads ask for a section as a list, `{"<module>": {"name": ["<section>"]}}`, as the camera fixtures do.
 UNVERIFIED: Doorbell ring and hub ring wrappers vary with component versions. The default doorbell wrappers follow
 ring version 3. `legacy=true` selects older read, enable and preview wrappers without retrying failed writes.
 Ring volume is an integer gear sent as a string. The API accepts 0 through 100, but that is not a claim that every model
