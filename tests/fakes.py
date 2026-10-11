@@ -167,10 +167,15 @@ if os.environ.get("FAKE_FFMPEG_PID"):
         pid.write(str(os.getpid()))
 
 url = sys.argv[sys.argv.index("-i") + 1]
-if url == "pipe:0" and not sys.stdin.buffer.read(188):
-    # Like the real ffmpeg: nothing to show until the first video arrives, and an error when none does.
-    print("pipe:0: Invalid data found when processing input", file=sys.stderr)
-    sys.exit(1)
+if url == "pipe:0":
+    head = sys.stdin.buffer.read(188)
+    if os.environ.get("FAKE_FFMPEG_LOG"):
+        with open(os.environ["FAKE_FFMPEG_LOG"], "a") as log:
+            log.write(json.dumps({{"stdin_head": head[:16].hex()}}) + "\\n")
+    if not head:
+        # Like the real ffmpeg: nothing to show until the first video arrives, and an error when none does.
+        print("pipe:0: Invalid data found when processing input", file=sys.stderr)
+        sys.exit(1)
 JPEG = bytes.fromhex({jpeg!r})
 FAILURES = {{
     "unauthorized": "[rtsp @ 0x1] method DESCRIBE failed: 401 Unauthorized",
@@ -182,6 +187,14 @@ FAILURES = {{
 }}
 if mode == "ok":
     sys.stdout.buffer.write(JPEG)
+elif mode == "failafter":
+    sys.stdout.buffer.write(JPEG)
+    sys.stdout.flush()
+    print("Error while decoding stream #0:0: Invalid data found when processing input", file=sys.stderr)
+    sys.exit(1)
+elif mode == "chatty":
+    print("signing in as " + os.environ["FAKE_FFMPEG_ECHO"], file=sys.stderr)
+    sys.exit(1)
 elif mode == "garbage":
     sys.stdout.buffer.write(b"this is not a picture")
 elif mode == "empty":
@@ -222,8 +235,15 @@ class FakeFfmpeg:
     def mode(self, name: str) -> None:
         self._patch.setenv("FAKE_FFMPEG_MODE", name)
 
-    def calls(self) -> list[list[str]]:
+    def _lines(self) -> list:
         return [json.loads(line) for line in self._log.read_text().splitlines()] if self._log.exists() else []
+
+    def calls(self) -> list[list[str]]:
+        return [line for line in self._lines() if isinstance(line, list)]
+
+    def stdin_heads(self) -> list[str]:
+        """The first bytes (hex) each run found on its standard input."""
+        return [line["stdin_head"] for line in self._lines() if isinstance(line, dict)]
 
     def urls(self) -> list[str]:
         return [call[call.index("-i") + 1] for call in self.calls()]

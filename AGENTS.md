@@ -33,6 +33,7 @@ All of them must pass before you commit. CI runs the same checks on Python 3.11,
 | `src/tolpo/mcp_server.py`, `src/tolpo/api.py` | The two interfaces |
 | `src/tolpo/snapshot.py` | One picture from a camera: runs ffmpeg and checks what comes back |
 | `src/tolpo/media.py` | Client for the video channel of the Tapo app (port 8800) |
+| `src/tolpo/tsvideo.py` | Finds the video track in the camera's MPEG-TS stream, so ffmpeg gets raw video |
 | `src/tolpo/compat.py` | Fixes for devices python-kasa cannot reach yet |
 | `bin/tolpo.js` | Node launcher: runs the bundled Python with `uvx` and passes stdio through |
 | `tests/` | Python tests. `tests/fakes.py` has the simulated devices and a fake ffmpeg, `tests/fake_camera.py` a fake camera video port |
@@ -68,8 +69,9 @@ All of them must pass before you commit. CI runs the same checks on Python 3.11,
   `tests/test_release_metadata.py` enforces it.
 - `package.json` lists `src/tolpo/*.py` on purpose. A root `.npmignore` does not override `files`, so a whole
   directory would ship compiled caches.
-- ffmpeg needs `-probesize` and `-analyzeduration` turned down for the live feed of the app channel. The camera adds
-  a second track ffmpeg cannot name, and without those flags it waits for minutes. A test guards this.
+- Do not hand the camera's stream to ffmpeg as it is. It carries a private second track that ffmpeg cannot name and can
+  start with padding packets, so ffmpeg's guessing stalls for minutes or finds nothing. `tsvideo.py` takes out the
+  video track and ffmpeg reads raw video. Tests with a real clip guard both cases.
 - Use `node --test` with no directory argument. `node --test test/` breaks on Node 22.
 - GitHub Actions in this repo are pinned to versions that exist. Check a tag before using it: some projects do not
   publish floating major tags.

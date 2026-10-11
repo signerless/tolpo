@@ -92,8 +92,8 @@ describe it, and as we checked on one of our own cameras:
    multipart parts. Those typed `video/mp2t` carry MPEG-TS with H.264 video and a private second track.
 
 The same boundary strings, headers and request fields appear in the streaming code of the app, which is how we
-cross-checked the public descriptions. The second track is a reason ffmpeg needs its probing turned down on a live
-pipe: it cannot identify the track and would wait for it.
+cross-checked the public descriptions. The second track, and padding packets at the start of some streams, make
+ffmpeg's guessing stall on a live pipe. So tolpo reads the program tables itself and gives ffmpeg only the raw video.
 
 tolpo signs in once per attempt, never retries a rejected login, and refuses a session without encryption. It uses
 only the owner's own account. Playback of SD card recordings, clip downloads and two-way audio use related

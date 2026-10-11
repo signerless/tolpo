@@ -13,7 +13,7 @@ import pytest
 from tolpo import media, snapshot
 
 from . import fakes
-from .fake_camera import FakeCamera, mpegts_with_unknown_track
+from .fake_camera import FakeCamera, fake_ts, mpegts_with_unknown_track
 
 PASSWORD = "My-Tapo-P@ssw0rd"
 
@@ -25,10 +25,12 @@ def anyio_backend():
 
 @pytest.fixture
 def real_ffmpeg():
-    if shutil.which("ffmpeg") is None:
+    have = shutil.which("ffmpeg") is not None and b"libx264" in subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True).stdout
+    if not have:
         if os.environ.get("CI"):
-            pytest.fail("the CI job has to install ffmpeg, otherwise these tests would silently not run")
-        pytest.skip("ffmpeg is not installed")
+            pytest.fail("the CI job has to install ffmpeg with libx264, otherwise these tests would silently not run")
+        pytest.skip("ffmpeg with libx264 is not installed")
 
 
 def ts(n: int, fill: int = 0x47) -> bytes:
@@ -198,22 +200,25 @@ async def test_a_stream_that_cannot_be_decrypted_blames_the_password_not_the_vid
 # ---- into ffmpeg -----------------------------------------------------------------------------
 
 
+VIDEO = b"\x00\x00\x00\x01\x65" + b"\x11" * 3000  # looks like the start of an H.264 picture; the fake ffmpeg does not decode it
+
+
 @pytest.mark.anyio
-async def test_the_feed_goes_to_ffmpeg_as_mpegts_on_stdin(ffmpeg):
-    async with FakeCamera(PASSWORD, [ts(40)] * 5) as camera:
+async def test_ffmpeg_gets_the_raw_video_and_not_the_transport_stream(ffmpeg):
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO)] * 3) as camera:
         feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
         picture = await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, secrets=(PASSWORD,))
         await asyncio.wait_for(camera.disconnected.wait(), 5)  # ffmpeg left early and the camera was let go
     assert picture.data == fakes.TINY_JPEG
     (args,) = ffmpeg.calls()
-    assert args[args.index("-i") + 1] == "pipe:0" and args[args.index("-f") + 1] == "mpegts"
-    assert "-rtsp_transport" not in args
+    assert args[args.index("-i") + 1] == "pipe:0" and args[args.index("-f") + 1] == "h264"
+    assert ffmpeg.stdin_heads()[0].startswith("0000000165")  # the video itself, with no transport stream around it
 
 
 @pytest.mark.anyio
 async def test_the_cameras_own_complaint_beats_ffmpegs(ffmpeg):
     ffmpeg.mode("empty")  # ffmpeg alone would only say that nothing came out
-    async with FakeCamera(PASSWORD, [ts(1)]) as camera:
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO)]) as camera:
         feed = media.live_chunks("127.0.0.1", "wrong", "low", port=camera.port)
         with pytest.raises(snapshot.GrabError) as caught:
             await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path)
@@ -221,22 +226,43 @@ async def test_the_cameras_own_complaint_beats_ffmpegs(ffmpeg):
 
 
 @pytest.mark.anyio
-async def test_a_hung_camera_connection_is_dropped_on_timeout(ffmpeg):
-    ffmpeg.mode("hang")
-    async with FakeCamera(PASSWORD, [ts(1)]) as camera:
+async def test_a_stream_that_breaks_after_it_started_is_blamed_on_the_camera_not_on_ffmpeg(ffmpeg):
+    ffmpeg.mode("hang")  # ffmpeg waits for more video that never comes
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO), fake_ts(VIDEO)], part_size=media.MAX_PART + 1, lie_from=1) as camera:
         feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
         with pytest.raises(snapshot.GrabError) as caught:
-            await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=2.0)
+            await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=3.0)
+    assert caught.value.reason == "failed" and "size" in str(caught.value)
+
+
+@pytest.mark.anyio
+async def test_a_stream_without_video_is_given_up_on(ffmpeg):
+    async with FakeCamera(PASSWORD, [ts(5)]) as camera:  # bytes that are no transport stream at all
+        feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
+        with pytest.raises(snapshot.GrabError) as caught:
+            await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=1.5)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert caught.value.reason == "timeout" and ffmpeg.calls() == []  # ffmpeg was never started
+
+
+@pytest.mark.anyio
+async def test_a_hung_ffmpeg_lets_the_camera_go(ffmpeg):
+    ffmpeg.mode("hang")
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO)]) as camera:
+        feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
+        with pytest.raises(snapshot.GrabError) as caught:
+            await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path, timeout=2.5)
         await asyncio.wait_for(camera.disconnected.wait(), 5)
     assert caught.value.reason == "timeout"
 
 
 @pytest.mark.anyio
 async def test_a_missing_ffmpeg_still_lets_the_camera_go(tmp_path):
-    async with FakeCamera(PASSWORD, [ts(1)]) as camera:
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO)]) as camera:
         feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
         with pytest.raises(snapshot.GrabError) as caught:
             await snapshot.grab(feed=feed, ffmpeg=str(tmp_path / "nope"))
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
     assert caught.value.reason == "missing"
 
 
@@ -246,7 +272,8 @@ async def test_a_real_picture_through_the_whole_chain(real_ffmpeg, tmp_path):
     clip = tmp_path / "clip.ts"
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=10", "-t", "2",
-         "-c:v", "mpeg2video", "-f", "mpegts", str(clip)],
+         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-bf", "0", "-g", "10", "-pix_fmt", "yuv420p",
+         "-f", "mpegts", str(clip)],
         check=True,
     )
     data = clip.read_bytes()
@@ -258,9 +285,9 @@ async def test_a_real_picture_through_the_whole_chain(real_ffmpeg, tmp_path):
 
 
 @pytest.mark.anyio
-async def test_a_second_track_ffmpeg_cannot_name_does_not_stall_the_picture(real_ffmpeg):
-    """Found on a real camera: it sends a private second track. A live feed never ends, so with ffmpeg's default
-    probing the picture would wait for minutes. The camera in this test keeps its connection open, like the real one."""
+async def test_a_second_track_nothing_can_name_does_not_stall_the_picture(real_ffmpeg):
+    """Found on a real camera: it sends a private second track. A live feed never ends, so ffmpeg, left to guess what
+    is in the pipe, waits for that track for minutes. The camera here keeps its connection open, like the real one."""
     clip = mpegts_with_unknown_track()
     probe = subprocess.run(
         ["ffprobe", "-v", "quiet", "-show_entries", "stream=codec_type", "-of", "compact", "-f", "mpegts", "-i", "pipe:0"],
@@ -274,3 +301,36 @@ async def test_a_second_track_ffmpeg_cannot_name_does_not_stall_the_picture(real
         picture = await snapshot.grab(feed=feed, secrets=(PASSWORD,), timeout=15)
     assert (picture.width, picture.height) == (640, 360)
     assert time.monotonic() - started < 10
+
+
+@pytest.mark.anyio
+async def test_a_stream_that_starts_with_padding_still_gives_a_picture(real_ffmpeg):
+    """Found on a second real camera: its stream begins with padding packets, before the tables ffmpeg looks for."""
+    clip = mpegts_with_unknown_track()
+    padded = b"\x47\x1f\xff\x10" + b"\xff" * 184
+    stream = padded * 200 + clip
+    chunks = [stream[i : i + 188 * 20] for i in range(0, len(stream), 188 * 20)]
+    async with FakeCamera(PASSWORD, chunks) as camera:
+        feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
+        picture = await snapshot.grab(feed=feed, secrets=(PASSWORD,), timeout=15)
+    assert (picture.width, picture.height) == (640, 360)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind, name", [(0x1B, "h264"), (0x24, "hevc")])
+async def test_ffmpeg_is_told_which_kind_of_video_the_tables_announce(kind, name):
+    async def feed():
+        yield fake_ts(VIDEO, kind=kind)
+
+    fmt, raw = await snapshot.elementary_video(feed(), 5)
+    assert fmt == name and [chunk async for chunk in raw] == [VIDEO]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("kind, name", [(0x1B, "h264"), (0x24, "hevc")])
+async def test_ffmpeg_is_started_for_the_kind_of_video_the_stream_carries(ffmpeg, kind, name):
+    async with FakeCamera(PASSWORD, [fake_ts(VIDEO, kind=kind)]) as camera:
+        feed = media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port)
+        await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path)
+    (args,) = ffmpeg.calls()
+    assert args[args.index("-f") + 1] == name

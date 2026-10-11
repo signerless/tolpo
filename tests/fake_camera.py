@@ -21,9 +21,10 @@ def _md5(text: str) -> str:
 class FakeCamera:
     def __init__(self, password: str, chunks: list[bytes], *, encrypt_type: str = "3", exchange_user: str = "admin",
                  send_key_exchange: bool = True, extra_parts: list[tuple[str, bytes]] = (), part_size: int | None = None,
-                 answer: bytes | None = None, silent: bool = False, stream_password: str | None = None):
+                 answer: bytes | None = None, silent: bool = False, stream_password: str | None = None, lie_from: int = 0):
         self.chunks, self.extra_parts, self.part_size = chunks, list(extra_parts), part_size
         self.encrypt_type, self.exchange_user, self.send_key_exchange = encrypt_type, exchange_user, send_key_exchange
+        self.lie_from = lie_from  # index of the first video part whose size is misreported
         self.answer, self.silent = answer, silent  # a fixed reply instead of the real conversation; or no reply at all
         digest = hashlib.sha256 if encrypt_type == "3" else hashlib.md5
         self.hashed = digest(password.encode()).hexdigest().upper()
@@ -104,7 +105,8 @@ class FakeCamera:
             for mime, body in self.extra_parts:
                 writer.write(part(mime, body, encrypted=True, seq=2))
             for seq, chunk in enumerate(self.chunks, start=3):
-                writer.write(part("video/mp2t", chunk, encrypted=True, seq=seq, claimed_size=self.part_size))
+                lie = self.part_size if seq - 3 >= self.lie_from else None
+                writer.write(part("video/mp2t", chunk, encrypted=True, seq=seq, claimed_size=lie))
                 await writer.drain()
             await reader.read()  # a live camera keeps talking; here the client leaves first
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -141,13 +143,14 @@ def _crc32_mpeg(data: bytes) -> int:
 
 
 def mpegts_with_unknown_track(ffmpeg: str = "ffmpeg") -> bytes:
-    """A short real clip (640x360 video) whose second track has a stream type nothing can identify, like the
+    """A short real clip (640x360 H.264 video) whose second track has a stream type nothing can identify, like the
     private track the Tapo cameras add. Made with the real ffmpeg, then the program map is edited and re-signed."""
     with tempfile.TemporaryDirectory() as folder:
         clip = Path(folder) / "clip.ts"
         subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10",
-             "-f", "lavfi", "-i", "sine=frequency=440", "-t", "3", "-c:v", "mpeg2video", "-c:a", "ac3", "-f", "mpegts", str(clip)],
+             "-f", "lavfi", "-i", "sine=frequency=440", "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+             "-bf", "0", "-g", "10", "-pix_fmt", "yuv420p", "-c:a", "ac3", "-f", "mpegts", str(clip)],
             check=True,
         )
         data = bytearray(clip.read_bytes())
@@ -204,3 +207,39 @@ def mpegts_with_unknown_track(ffmpeg: str = "ffmpeg") -> bytes:
             payload += 14  # start code, stream id, length, flags and the time stamp
         data[payload : i + 188] = b"\xa5" * (i + 188 - payload)
     return bytes(data)
+
+
+def _packet(pid: int, payload: bytes, *, start: bool, cc: int) -> bytes:
+    head = bytes([0x47, (0x40 if start else 0) | pid >> 8, pid & 0xFF])
+    if len(payload) >= 184:
+        return head + bytes([0x10 | cc & 0x0F]) + payload[:184]
+    pad = 184 - len(payload)  # fill the packet with an adaptation field of stuffing bytes
+    field = b"\x00" if pad == 1 else bytes([pad - 1, 0x00]) + b"\xff" * (pad - 2)
+    return head + bytes([0x30 | cc & 0x0F]) + field + payload
+
+
+def _section(table: int, body: bytes) -> bytes:
+    section = bytes([table, 0xB0 | (len(body) + 4) >> 8, (len(body) + 4) & 0xFF]) + body
+    return b"\x00" + section + _crc32_mpeg(section).to_bytes(4, "big")  # a pointer field, then the table and its CRC
+
+
+def fake_ts(video: bytes, *, kind: int = 0x1B, null_packets: int = 0, extra_track: bool = True, extra_first: bool = False) -> bytes:
+    """A made-up but well-formed transport stream: optional padding, the program tables, a private second track like
+    the cameras', and `video` as the payload of the video track. Good for anything that does not decode the video."""
+    video_pid, other_pid, pmt_pid = 0x100, 0x101, 0x1000
+    streams = bytes([kind, 0xE0 | video_pid >> 8, video_pid & 0xFF, 0xF0, 0x00])
+    if extra_track:
+        other = bytes([0x91, 0xE0 | other_pid >> 8, other_pid & 0xFF, 0xF0, 0x00])
+        streams = other + streams if extra_first else streams + other
+    pat = _section(0x00, bytes([0x00, 0x01, 0xC1, 0x00, 0x00, 0x00, 0x01, 0xE0 | pmt_pid >> 8, pmt_pid & 0xFF]))
+    pmt = _section(0x02, bytes([0x00, 0x01, 0xC1, 0x00, 0x00, 0xE0 | video_pid >> 8, video_pid & 0xFF, 0xF0, 0x00]) + streams)
+    out = [_packet(0x1FFF, b"\xff" * 184, start=False, cc=0)] * null_packets
+    out += [_packet(0, pat, start=True, cc=0), _packet(pmt_pid, pmt, start=True, cc=0)]
+    pes = b"\x00\x00\x01\xe0\x00\x00\x80\x80\x05\x21\x00\x01\x00\x01" + video  # start code, stream id, flags, a time stamp
+    cc = 0
+    for i in range(0, len(pes), 184):
+        out.append(_packet(video_pid, pes[i : i + 184], start=(i == 0), cc=cc))
+        cc += 1
+        if extra_track and i == 0:
+            out.append(_packet(other_pid, b"\x00\x00\x01\xbd\x00\x00\x80\x00\x00" + b"\xa5" * 100, start=True, cc=0))
+    return b"".join(out)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .config import Config, is_loopback, load_config
 from .registry import NotEnabled, Registry, RegistryError
-from .snapshot import FEED_INPUT, GrabError, pump, scrub
+from .snapshot import RAW_VIDEO_INPUT, GrabError, elementary_video, pump, scrub
 from .views import clean
 
 NO_CREDENTIALS = (
@@ -110,7 +110,15 @@ async def _watch(cfg: Config, ref: str, quality: str, seconds: int | None = None
         url, feed, secret = await registry.live_view(entry, quality)
         argv = [player, "-hide_banner", "-loglevel", "warning", "-window_title", clean(entry.device.alias or entry.slug)]
         argv += ["-t", str(seconds)] if seconds else []
-        argv += ["-rtsp_transport", "tcp", "-i", url] if url else [*FEED_INPUT, "-i", "pipe:0"]
+        if url:
+            argv += ["-rtsp_transport", "tcp", "-i", url]
+        else:  # the player gets the raw video only: it cannot make sense of the camera's extra track either
+            try:
+                fmt, feed = await elementary_video(feed, 20.0)
+            except GrabError as exc:
+                print(f"The camera stopped the video: {exc}.", file=sys.stderr)
+                return 1
+            argv += [*RAW_VIDEO_INPUT, "-f", fmt, "-i", "pipe:0"]
         proc = await asyncio.create_subprocess_exec(
             *argv, stdin=asyncio.subprocess.PIPE if feed is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,

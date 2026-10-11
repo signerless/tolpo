@@ -17,10 +17,11 @@ from tolpo.mcp_server import build_server
 from tolpo.registry import BadRequest, DeviceUnavailable, Forbidden, NotEnabled, Registry, Unsupported
 
 from . import fakes
-from .fake_camera import FakeCamera
+from .fake_camera import FakeCamera, fake_ts
 
 PASSWORD = "Sup3rS3cret"  # the camera account
 TAPO_PASSWORD = "Tapo-Pass-123"  # the Tapo account the whole home is signed in with
+STREAM = fake_ts(b"\x00\x00\x00\x01\x65" + b"\x11" * 3000)  # what a camera sends: tables, then video
 
 
 @pytest.fixture
@@ -112,7 +113,7 @@ async def test_a_camera_behind_the_hub_has_no_stream_of_its_own(ffmpeg):
 
 @pytest.mark.anyio
 async def test_without_a_camera_account_the_apps_video_channel_is_used(ffmpeg, monkeypatch):
-    async with FakeCamera(TAPO_PASSWORD, [b"\x47" * 188 * 40] * 4) as camera:
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 3) as camera:
         app_channel(camera, monkeypatch)
         reg, _ = house(ffmpeg, camera_username="", camera_password="")
         picture = await reg.snapshot(reg.resolve_one("hallway-cam"), "high")
@@ -124,8 +125,25 @@ async def test_without_a_camera_account_the_apps_video_channel_is_used(ffmpeg, m
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("via_rtsp", [False, True])
+async def test_whatever_ffmpeg_prints_the_passwords_are_removed(ffmpeg, monkeypatch, via_rtsp):
+    """On the app's channel ffmpeg never sees the Tapo password, and with RTSP it sees the camera one. Either way, if
+    ffmpeg ever prints it, it must not get out."""
+    secret = PASSWORD if via_rtsp else TAPO_PASSWORD
+    ffmpeg.mode("chatty")
+    monkeypatch.setenv("FAKE_FFMPEG_ECHO", secret)
+    async with FakeCamera(TAPO_PASSWORD, [STREAM]) as camera:
+        app_channel(camera, monkeypatch)
+        reg, _ = house(ffmpeg) if via_rtsp else house(ffmpeg, camera_username="", camera_password="")
+        with pytest.raises(DeviceUnavailable) as caught:
+            await reg.snapshot(reg.resolve_one("hallway-cam"))
+    shown = f"{caught.value} {caught.value.detail}"
+    assert secret not in shown and "signing in as ***" in caught.value.detail
+
+
+@pytest.mark.anyio
 async def test_with_a_camera_account_rtsp_is_used_and_the_apps_channel_is_left_alone(ffmpeg, monkeypatch):
-    async with FakeCamera(TAPO_PASSWORD, [b"\x47" * 188]) as camera:
+    async with FakeCamera(TAPO_PASSWORD, [STREAM]) as camera:
         app_channel(camera, monkeypatch)
         reg, _ = house(ffmpeg)
         await reg.snapshot(reg.resolve_one("hallway-cam"))
@@ -136,7 +154,7 @@ async def test_with_a_camera_account_rtsp_is_used_and_the_apps_channel_is_left_a
 @pytest.mark.anyio
 async def test_a_rejected_login_is_never_repeated_in_a_hurry(ffmpeg, monkeypatch):
     """Repeated wrong logins can lock a camera out, so after one rejection the camera is left alone for a while."""
-    async with FakeCamera("a different password", [b"\x47" * 188]) as camera:
+    async with FakeCamera("a different password", [STREAM]) as camera:
         app_channel(camera, monkeypatch)
         reg, _ = house(ffmpeg, camera_username="", camera_password="")
         entry = reg.resolve_one("hallway-cam")
@@ -449,13 +467,13 @@ def test_the_command_is_wired_into_the_parser(capsys):
 @pytest.mark.anyio
 async def test_watch_opens_a_player_fed_by_the_apps_channel(ffmpeg, monkeypatch):
     monkeypatch.setattr(cli, "Registry", Offline)
-    async with FakeCamera(TAPO_PASSWORD, [b"\x47" * 188 * 40] * 3) as camera:
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 3) as camera:
         app_channel(camera, monkeypatch)
         code = await cli._watch(cli_config(ffmpeg, camera_username="", camera_password=""), "hallway-cam", "high", 5, ffplay=ffmpeg.path)
         await asyncio.wait_for(camera.disconnected.wait(), 5)  # closing the window lets the camera go
     assert code == 0 and (camera.logins, camera.failed_logins) == (1, 0)
     (args,) = ffmpeg.calls()
-    assert args[args.index("-i") + 1] == "pipe:0" and args[args.index("-f") + 1] == "mpegts"
+    assert args[args.index("-i") + 1] == "pipe:0" and args[args.index("-f") + 1] == "h264"
     assert args[args.index("-t") + 1] == "5" and args[args.index("-window_title") + 1] == "hallway-cam"
 
 
@@ -494,7 +512,7 @@ async def test_watch_shows_the_player_error_without_the_password(ffmpeg, monkeyp
 @pytest.mark.anyio
 async def test_watch_reports_what_the_camera_said_when_the_login_fails(ffmpeg, monkeypatch, capsys):
     monkeypatch.setattr(cli, "Registry", Offline)
-    async with FakeCamera("a different password", [b"\x47" * 188]) as camera:
+    async with FakeCamera("a different password", [STREAM]) as camera:
         app_channel(camera, monkeypatch)
         code = await cli._watch(cli_config(ffmpeg, camera_username="", camera_password=""), "hallway-cam", "low", None, ffplay=ffmpeg.path)
     assert code == 1 and "rejected the Tapo account password" in capsys.readouterr().err

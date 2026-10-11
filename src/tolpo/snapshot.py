@@ -1,4 +1,5 @@
-"""Still pictures from cameras. ffmpeg opens the camera's RTSP stream, decodes one frame and returns a JPEG.
+"""Still pictures from cameras. ffmpeg decodes one frame of the camera's live video, either from its RTSP stream or
+from the video that the Tapo app's channel carries, and returns a JPEG.
 
 This module knows nothing about devices or policy. `registry.py` decides whether a picture may be taken.
 """
@@ -15,6 +16,8 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Sequence
 from urllib.parse import quote, quote_plus
 
+from .tsvideo import TsVideo
+
 log = logging.getLogger(__name__)
 
 RTSP_PORT = 554
@@ -24,9 +27,9 @@ MAX_WIDTH = 1280  # wider pictures are scaled down: they cost a model more and s
 GRAB_TIMEOUT = 20.0
 MAX_BYTES = 4_000_000
 RTSP_INPUT = ("-rtsp_transport", "tcp")  # UDP drops packets on Wi-Fi and gives smeared frames
-# The app's channel carries a second track that ffmpeg cannot identify. A live pipe never ends, so by default ffmpeg
-# keeps probing that track until it has read 5 MB, which takes minutes. Skipping the probe gives a picture in seconds.
-FEED_INPUT = ("-fflags", "nobuffer", "-analyzeduration", "0", "-probesize", "32", "-f", "mpegts")
+# Raw video from a pipe that never ends: stop probing as soon as the picture size is known, instead of reading on for
+# seconds. Measured on two real cameras: a first picture after about 1 s instead of 3 to 4 s.
+RAW_VIDEO_INPUT = ("-probesize", "32768", "-analyzeduration", "1")
 
 
 class GrabError(Exception):
@@ -151,23 +154,22 @@ async def _release(proc: asyncio.subprocess.Process, pumping: asyncio.Task | Non
     return result[0] if isinstance(result[0], GrabError) else None
 
 
-async def grab(
-    source: str | None = None,
+async def _run(
+    source: str,
+    feed: AsyncIterator[bytes] | None,
+    input_args: Sequence[str],
     *,
-    feed: AsyncIterator[bytes] | None = None,
-    ffmpeg: str = "ffmpeg",
-    input_args: Sequence[str] = RTSP_INPUT,
-    max_width: int = MAX_WIDTH,
-    timeout: float = GRAB_TIMEOUT,
-    secrets: Sequence[str] = (),
+    ffmpeg: str,
+    max_width: int,
+    timeout: float,
+    secrets: Sequence[str],
 ) -> Picture:
-    """Take one frame from `source` (an address ffmpeg can open), or from `feed`, which yields MPEG-TS.
-    `secrets` are removed from anything ffmpeg printed."""
+    """Start ffmpeg on `source`, or on `feed` through its stdin, and return the first frame it decodes."""
     if feed is not None:
-        source, input_args = "pipe:0", FEED_INPUT
+        source = "pipe:0"
     try:
         proc = await asyncio.create_subprocess_exec(
-            *command(ffmpeg, source or "", input_args, max_width),
+            *command(ffmpeg, source, input_args, max_width),
             stdin=asyncio.subprocess.PIPE if feed is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -198,3 +200,61 @@ async def grab(
             raise GrabError(reason, message, detail)
         raise GrabError("no_picture", "the camera connected but no usable picture came out of the stream", detail)
     return Picture(out, size[0], size[1], time.time())
+
+
+async def elementary_video(feed: AsyncIterator[bytes], timeout: float) -> tuple[str, AsyncIterator[bytes]]:
+    """Read the camera's transport stream until its tables name the video track. Returns the raw video format and
+    an iterator over the raw video, which carries on from the same connection. Closes the feed if it fails."""
+    video, first = TsVideo(), b""
+
+    async def find() -> None:
+        nonlocal first
+        async for chunk in feed:
+            first = video.feed(chunk)
+            if video.format:
+                return
+        raise GrabError("no_picture", "the camera's stream ended before it showed any video")
+
+    try:
+        await asyncio.wait_for(find(), timeout)
+    except TimeoutError:
+        await feed.aclose()
+        raise GrabError("timeout", f"the camera sent no video within {timeout:.0f} seconds") from None
+    except BaseException:
+        await feed.aclose()
+        raise
+
+    async def raw() -> AsyncIterator[bytes]:
+        try:
+            if first:
+                yield first
+            async for chunk in feed:
+                if data := video.feed(chunk):
+                    yield data
+        finally:
+            await feed.aclose()
+
+    return video.format, raw()
+
+
+async def grab(
+    source: str | None = None,
+    *,
+    feed: AsyncIterator[bytes] | None = None,
+    ffmpeg: str = "ffmpeg",
+    input_args: Sequence[str] = RTSP_INPUT,
+    max_width: int = MAX_WIDTH,
+    timeout: float = GRAB_TIMEOUT,
+    secrets: Sequence[str] = (),
+) -> Picture:
+    """Take one frame from `source` (an address ffmpeg can open), or from `feed`, which yields MPEG-TS.
+    `secrets` are removed from anything ffmpeg printed."""
+    if feed is None:
+        return await _run(source or "", None, input_args, ffmpeg=ffmpeg, max_width=max_width, timeout=timeout, secrets=secrets)
+    started = time.monotonic()
+    fmt, raw = await elementary_video(feed, timeout)
+    try:
+        left = max(1.0, timeout - (time.monotonic() - started))
+        return await _run("", raw, (*RAW_VIDEO_INPUT, "-f", fmt), ffmpeg=ffmpeg, max_width=max_width, timeout=left, secrets=secrets)
+    finally:
+        await feed.aclose()  # also when ffmpeg never started

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import shutil
+import subprocess
 import time
 from urllib.parse import unquote, urlsplit
 
@@ -28,10 +29,12 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def real_ffmpeg():
-    if shutil.which("ffmpeg") is None:
+    have = shutil.which("ffmpeg") is not None and b"libx264" in subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"], capture_output=True).stdout
+    if not have:
         if os.environ.get("CI"):
-            pytest.fail("the CI job has to install ffmpeg, otherwise these tests would silently not run")
-        pytest.skip("ffmpeg is not installed")
+            pytest.fail("the CI job has to install ffmpeg with libx264, otherwise these tests would silently not run")
+        pytest.skip("ffmpeg with libx264 is not installed")
 
 
 # ---- pure functions --------------------------------------------------------------------------
@@ -191,6 +194,14 @@ async def test_a_password_that_ffmpeg_prints_on_its_own_is_removed_too(tmp_path)
     with pytest.raises(snapshot.GrabError) as caught:
         await snapshot.grab("rtsp://x", ffmpeg=str(chatty), secrets=("hunter2",))
     assert "hunter2" not in caught.value.detail and "login failed for ***" in caught.value.detail
+
+
+@pytest.mark.anyio
+async def test_an_ffmpeg_that_fails_after_printing_a_picture_is_still_a_failure(ffmpeg):
+    ffmpeg.mode("failafter")
+    with pytest.raises(snapshot.GrabError) as caught:
+        await snapshot.grab("rtsp://cam:pw@192.0.2.10:554/stream2", ffmpeg=ffmpeg.path)
+    assert caught.value.reason == "failed" and "Invalid data" in caught.value.detail
 
 
 @pytest.mark.anyio

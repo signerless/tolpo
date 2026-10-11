@@ -257,6 +257,10 @@ agent uses it. This saves one picture to a file that only you can read:
 npx -y tolpo snapshot "Hallway Cam" -o hallway.jpg
 ```
 
+To watch a camera live on your own screen, use `npx -y tolpo watch "Hallway Cam"`. It opens ffplay, which comes with
+ffmpeg, and closes when you close the window. `--seconds 30` stops it sooner. Nothing is recorded and nothing goes to
+an agent.
+
 tolpo takes one frame from the camera's live stream with ffmpeg and returns it as a JPEG, at most 1280 pixels
 wide. `--quality high` asks for the main stream instead of the small one. There are two ways to reach the stream:
 
@@ -348,7 +352,8 @@ src/tolpo/
   compat.py      small fixes for devices python-kasa cannot reach yet
   snapshot.py    one picture from a camera, taken with ffmpeg
   media.py       the video channel of the Tapo app (port 8800)
-  cli.py         serve / mcp / scan / snapshot entry points
+  tsvideo.py     finds the video track in a camera's stream
+  cli.py         serve / mcp / scan / snapshot / watch entry points
 tests/           full suite against simulated devices
 docs/protocols.md  how Tapo devices talk on the local network
 assets/          logo, device icons and social preview
