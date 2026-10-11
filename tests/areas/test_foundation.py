@@ -266,3 +266,31 @@ def test_every_real_area_loads_cleanly_and_declares_sound_methods():
     for rule in policy.declared_methods():
         assert rule.summary.strip() and rule.kinds and all(isinstance(k, str) and k for k in rule.kinds), rule
         assert rule.summary.rstrip().endswith("."), f"{rule.method}: write the summary as a sentence"
+
+
+@pytest.mark.anyio
+async def test_the_owner_can_switch_areas_off_and_an_agent_can_see_what_exists(make_house, mcp, monkeypatch):
+    monkeypatch.setattr(areas, "modules", lambda: [demo_area("demo"), areas.importlib.import_module("tolpo.areas.overview")])
+    reg, caller, _ = make_house(areas=("overview",))  # only the overview is on
+    async with mcp(reg, caller) as client:
+        names = {t.name for t in (await client.list_tools()).tools}
+        listing = (await client.call_tool("tolpo_areas", {})).structured_content
+    assert "tolpo_areas" in names and "demo_read_tool" not in names
+    assert listing["level"] == 1
+    assert listing["areas"] == [{"area": "demo", "on": False, "about": "", "tools": []}]  # off, and the overview does not list itself
+    reg, caller, _ = make_house()  # all on
+    async with mcp(reg, caller) as client:
+        listing = (await client.call_tool("tolpo_areas", {})).structured_content
+    assert listing["areas"][0]["on"] is True and "demo_read_tool" in listing["areas"][0]["tools"]
+
+
+def test_the_areas_setting_comes_from_the_file_and_the_environment(tmp_path, monkeypatch):
+    from tolpo.config import load_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('[server]\nareas = ["lights", "plugs"]\n')
+    assert load_config(str(path)).areas == ("lights", "plugs")
+    monkeypatch.setenv("TOLPO_AREAS", "cameras, hub")
+    assert load_config(str(path)).areas == ("cameras", "hub")
+    monkeypatch.setenv("TOLPO_AREAS", "")
+    assert load_config(str(path)).areas == ()

@@ -46,6 +46,9 @@ class AreaContext:
     auth: list = field(default_factory=list)  # FastAPI dependencies that every route must carry
     ready_for: Callable[[list[str]], Awaitable[None]] | None = None  # waits until the named devices are known
     translated: Callable[[], Any] | None = None  # context manager: registry errors become tool errors
+    catalog: dict = field(default_factory=dict)  # area name -> {"enabled", "summary", "tools"}, filled by load()
+    current: str = ""  # the area being loaded
+    _names: dict = field(default_factory=dict)
 
     @property
     def cfg(self) -> Config:
@@ -57,6 +60,7 @@ class AreaContext:
         def decorate(fn):
             if self.server is not None:
                 self.server.tool(title=title, annotations=annotations_for(tier), **options)(fn)
+                self._names.setdefault(self.current, []).append(options.get("name") or fn.__name__)
             return fn
 
         return decorate
@@ -91,16 +95,28 @@ def declare_methods() -> None:
         policy.register_methods(getattr(module, "METHODS", ()))
 
 
+def area_name(module: ModuleType) -> str:
+    return module.__name__.rsplit(".", 1)[-1]
+
+
 def load(ctx: AreaContext, *, strict: bool = False) -> None:
-    """Register the tools and routes of every area. `strict` re-raises, which the tests use."""
+    """Register the tools and routes of the enabled areas (all of them unless `areas` is set in the config).
+    `strict` re-raises, which the tests use. The result is kept in `ctx.catalog`."""
     declare_methods()
+    wanted = set(ctx.cfg.areas)
     for module in modules():
+        name = area_name(module)
+        enabled = not wanted or name in wanted
+        ctx.current = name
         try:
-            if ctx.server is not None and hasattr(module, "tools"):
+            if enabled and ctx.server is not None and hasattr(module, "tools"):
                 module.tools(ctx)
-            if ctx.api is not None and hasattr(module, "routes"):
+            if enabled and ctx.api is not None and hasattr(module, "routes"):
                 module.routes(ctx)
         except Exception:
             if strict:
                 raise
             log.exception("area %s could not be loaded; the rest of tolpo keeps working", module.__name__)
+        summary = (module.__doc__ or "").strip().splitlines()[0] if module.__doc__ else ""
+        ctx.catalog[name] = {"enabled": enabled, "summary": summary, "tools": list(ctx._names.get(name, []))}
+    ctx.current = ""
