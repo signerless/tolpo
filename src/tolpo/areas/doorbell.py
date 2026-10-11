@@ -141,7 +141,6 @@ METHODS += [
         ("setChimeRingPlan", "Change the paired chime ring schedule."),
         ("setSmartRespConfig", "Change the automatic voice reply and delay."),
         ("setSmartRespStatus", "Enable or disable automatic voice replies."),
-        ("setAntiTheftEnable", "Arm or disarm anti-theft protection, which blocks button reset when armed."),
         ("setWakeUpConfig", "Change the battery doorbell wake-up trigger."),
         ("setBatteryOperatingMode", "Change the doorbell battery operating mode."),
         ("setLedColor", "Change the doorbell button LED color."),
@@ -151,6 +150,9 @@ METHODS += [
         ("setRingPlay", "Preview or stop an audible doorbell ring."),
         ("setHubRingPlay", "Preview or stop an audible connected hub ring."),
         ("setExistingChimeCfg", "Change the electrical configuration of an in-wall chime."),
+        # Anti-theft is an alarm with an arm state. Disarming lowers a protection; arming blocks a factory reset
+        # by button. Both change what a person can do at the door, so it is level 3.
+        ("setAntiTheftEnable", "Arm or disarm the anti-theft alarm. Armed, it blocks a factory reset by button."),
         ("playQuickResp", "Play an audible voice reply to a visitor."),
         ("stopQuickResp", "Stop a doorbell voice reply."),
     ]],
@@ -285,13 +287,25 @@ async def auto_response_configure(registry, caller, device, reply_id, delay):
     return await _write(registry, caller, entry, "setSmartRespConfig", {"quick_response": {"smart_resp_config": config}}, changed=config)
 
 
-async def toggle_setting(registry, caller, device, setting, enabled):
-    _choice(setting, ("auto_response", "anti_theft"), "toggle setting")
+async def auto_response(registry, caller, device, enabled=None, reply_id=None, delay=None):
+    """One write per call: switch auto response on or off, or choose its reply and delay. Never both."""
+    if enabled is None:
+        if reply_id is None or delay is None:
+            raise BadRequest("Give enabled alone, or reply_id with delay")
+        return await auto_response_configure(registry, caller, device, reply_id, delay)
+    _boolean(enabled, "enabled")
+    if reply_id is not None or delay is not None:
+        raise BadRequest("Give enabled alone, or reply_id with delay. One change per call")
+    entry = _entry(registry, device, ["doorbell"])
+    config = {"enabled": "on" if enabled else "off"}
+    return await _write(registry, caller, entry, "setSmartRespStatus", {"quick_response": {"smart_resp_status": config}}, changed={"auto_response": enabled})
+
+
+async def anti_theft(registry, caller, device, enabled, confirm=None):
     _boolean(enabled, "enabled")
     entry = _entry(registry, device, ["doorbell"])
-    method, module, section = ("setSmartRespStatus", "quick_response", "smart_resp_status") if setting == "auto_response" else ("setAntiTheftEnable", "anti_theft", "config")
     config = {"enabled": "on" if enabled else "off"}
-    return await _write(registry, caller, entry, method, {module: {section: config}}, changed={setting: enabled})
+    return await _write(registry, caller, entry, "setAntiTheftEnable", {"anti_theft": {"config": config}}, confirm, {"anti_theft": enabled})
 
 
 async def wake_up(registry, caller, device, trigger):
@@ -652,24 +666,25 @@ def tools(ctx):
     @ctx.tool(title="Configure auto response", tier=Tier.SETTING)
     async def doorbell_auto_response_set(
         device: Device,
-        reply_id: Annotated[str, Field(description="Listed voice reply id")],
-        delay: Annotated[int, Field(description="Response delay. UNVERIFIED seconds and per-model range", ge=0, le=600, strict=True)],
+        enabled: Annotated[bool | None, Field(description="Switch automatic replies on or off. Give it alone", strict=True)] = None,
+        reply_id: Annotated[str | None, Field(description="Listed voice reply id. Give it with delay")] = None,
+        delay: Annotated[int | None, Field(description="Response delay. UNVERIFIED seconds and per-model range", ge=0, le=600, strict=True)] = None,
     ) -> dict[str, Any]:
-        """Select an automatic voice reply and delay at level 2. Enable separately with doorbell_behavior_enabled_set. UNVERIFIED on hardware."""
+        """Switch automatic voice replies on or off, or choose the reply and its delay, at level 2. One change per call. UNVERIFIED on hardware."""
         await ctx.ready_for([device])
         with ctx.translated():
-            return await auto_response_configure(ctx.registry, ctx.caller, device, reply_id, delay)
+            return await auto_response(ctx.registry, ctx.caller, device, enabled, reply_id, delay)
 
-    @ctx.tool(title="Enable doorbell behavior", tier=Tier.SETTING)
-    async def doorbell_behavior_enabled_set(
+    @ctx.tool(title="Arm or disarm anti-theft", tier=Tier.SECURITY)
+    async def doorbell_anti_theft_set(
         device: Device,
-        setting: Annotated[Literal["auto_response", "anti_theft"], Field(description="Automatic reply or anti-theft protection")],
-        enabled: Annotated[bool, Field(description="Whether this behavior is active", strict=True)],
+        enabled: Annotated[bool, Field(description="True arms the anti-theft alarm, false disarms it", strict=True)],
+        confirm: Confirm = None,
     ) -> dict[str, Any]:
-        """Enable auto response or arm anti-theft at level 2. Armed anti-theft blocks factory reset by button. UNVERIFIED on hardware."""
+        """Arm or disarm the anti-theft alarm at level 3. Armed, it blocks a factory reset by button. Confirm setAntiTheftEnable DEVICE. UNVERIFIED on hardware."""
         await ctx.ready_for([device])
         with ctx.translated():
-            return await toggle_setting(ctx.registry, ctx.caller, device, setting, enabled)
+            return await anti_theft(ctx.registry, ctx.caller, device, enabled, confirm)
 
     @ctx.tool(title="Change doorbell wake-up", tier=Tier.SETTING)
     async def doorbell_wake_up_set(

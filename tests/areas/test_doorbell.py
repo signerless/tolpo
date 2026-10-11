@@ -148,9 +148,9 @@ READ_METHODS = {
     "getRingStatus", "getRingSoundConfig", "getRingTypeList", "getRingPlay", "getHubRingStatus", "getHubRingSoundConfig", "getHubRingTypeList", "getHubRingPlay", "getHubRingPlan", "getChimeRingPlan", "getExistingChimeCfg", "getQuickRespList", "getSmartRespStatus", "getSmartRespConfig", "getAntiTheftEnable", "getAntiTheftStatus", "getWakeUpConfig", "getBatteryOperatingMode", "getLedColor", "getSirenTypeList", "getSirenConfig", "getSirenStatus",
 }
 SETTING_METHODS = {
-    "set_chime_alarm_configure", "setRingSoundConfig", "setHubRingSoundConfig", "setRingStatus", "setHubRingStatus", "setHubRingPlan", "setChimeRingPlan", "setSmartRespConfig", "setSmartRespStatus", "setAntiTheftEnable", "setWakeUpConfig", "setBatteryOperatingMode", "setLedColor", "setPreWakeup", "setSirenConfig",
+    "set_chime_alarm_configure", "setRingSoundConfig", "setHubRingSoundConfig", "setRingStatus", "setHubRingStatus", "setHubRingPlan", "setChimeRingPlan", "setSmartRespConfig", "setSmartRespStatus", "setWakeUpConfig", "setBatteryOperatingMode", "setLedColor", "setPreWakeup", "setSirenConfig",
 }
-SECURITY_METHODS = {"play_alarm", "stop_alarm", "setRingPlay", "setHubRingPlay", "setExistingChimeCfg", "playQuickResp", "stopQuickResp", "setSirenStatus"}
+SECURITY_METHODS = {"play_alarm", "stop_alarm", "setRingPlay", "setHubRingPlay", "setExistingChimeCfg", "playQuickResp", "stopQuickResp", "setSirenStatus", "setAntiTheftEnable"}
 
 
 def method_device(method):
@@ -240,8 +240,8 @@ TOOL_CASES = [
     ("doorbell_quick_reply", {"device": "front-bell", "action": "play", "reply_id": "1", "confirm": "playQuickResp front-bell"}, 3, "playQuickResp"),
     ("doorbell_quick_reply", {"device": "front-bell", "action": "stop", "confirm": "stopQuickResp front-bell"}, 3, "stopQuickResp"),
     ("doorbell_auto_response_set", {"device": "front-bell", "reply_id": "1", "delay": 5}, 2, "setSmartRespConfig"),
-    ("doorbell_behavior_enabled_set", {"device": "front-bell", "setting": "auto_response", "enabled": False}, 2, "setSmartRespStatus"),
-    ("doorbell_behavior_enabled_set", {"device": "front-bell", "setting": "anti_theft", "enabled": True}, 2, "setAntiTheftEnable"),
+    ("doorbell_auto_response_set", {"device": "front-bell", "enabled": False}, 2, "setSmartRespStatus"),
+    ("doorbell_anti_theft_set", {"device": "front-bell", "enabled": True, "confirm": "setAntiTheftEnable front-bell"}, 3, "setAntiTheftEnable"),
     ("doorbell_wake_up_set", {"device": "front-bell", "trigger": "doorbell"}, 2, "setWakeUpConfig"),
     ("doorbell_pre_wake", {"device": "front-bell"}, 2, "setPreWakeup"),
     ("doorbell_battery_mode_set", {"device": "front-bell", "mode": "battery_life_first"}, 2, "setBatteryOperatingMode"),
@@ -312,7 +312,8 @@ async def test_exact_write_shapes(make_house):
     await doorbell.existing_chime(reg, caller, "front-bell", "digital", 2, "setExistingChimeCfg front-bell")
     await doorbell.quick_reply_action(reg, caller, "front-bell", "play", "1", "playQuickResp front-bell")
     await doorbell.auto_response_configure(reg, caller, "front-bell", "1", 5)
-    await doorbell.toggle_setting(reg, caller, "front-bell", "anti_theft", True)
+    await doorbell.auto_response(reg, caller, "front-bell", enabled=True)
+    await doorbell.anti_theft(reg, caller, "front-bell", True, "setAntiTheftEnable front-bell")
     await doorbell.wake_up(reg, caller, "front-bell", "detection")
     await doorbell.pre_wake(reg, caller, "front-bell")
     await doorbell.battery_mode(reg, caller, "front-bell", "super_power_saving", False)
@@ -326,6 +327,7 @@ async def test_exact_write_shapes(make_house):
         ("setExistingChimeCfg", {"existing_chime": {"config": {"type": "digital", "ring_length": 2}}}),
         ("playQuickResp", {"quick_response": {"play_quick_resp_audio": {"id": "1", "force": "0"}}}),
         ("setSmartRespConfig", {"quick_response": {"smart_resp_config": {"id": "1", "play_interval": "5"}}}),
+        ("setSmartRespStatus", {"quick_response": {"smart_resp_status": {"enabled": "on"}}}),
         ("setAntiTheftEnable", {"anti_theft": {"config": {"enabled": "on"}}}),
         ("setWakeUpConfig", {"wake_up": {"config": {"wake_up_type": "detection"}}}),
         ("setPreWakeup", {"preWakeUp": {"child_device_list": [{"device_id": "bell-test"}]}}),
@@ -380,8 +382,11 @@ INVALID_CALLS = [
     (doorbell.quick_reply_action, ("front-bell", "play", "unknown")),
     (doorbell.auto_response_configure, ("front-bell", "1", -1)),
     (doorbell.auto_response_configure, ("front-bell", "unknown", 5)),
-    (doorbell.toggle_setting, ("front-bell", "anti_theft", 1)),
-    (doorbell.toggle_setting, ("front-bell", "unknown", True)),
+    (doorbell.anti_theft, ("front-bell", 1, "setAntiTheftEnable front-bell")),
+    (doorbell.auto_response, ("front-bell", 1)),
+    (doorbell.auto_response, ("front-bell",)),
+    (doorbell.auto_response, ("front-bell", None, "1")),
+    (doorbell.auto_response, ("front-bell", True, "1", 5)),
     (doorbell.wake_up, ("front-bell", "unknown")),
     (doorbell.battery_mode, ("front-bell", "unknown", False)),
     (doorbell.battery_mode, ("front-bell", "battery_life_first", 1)),
@@ -465,8 +470,9 @@ async def test_event_bounds_dedup_malformed_timestamps_and_parent_auto_selection
 @pytest.mark.parametrize("name,params", [
     ("doorbell_ring_sound_set", {"device": "front-bell", "target": "doorbell", "tone": "ding", "volume": True}),
     ("doorbell_ring_sound_set", {"device": "front-bell", "target": "doorbell", "tone": "ding", "volume": "1"}),
-    ("doorbell_behavior_enabled_set", {"device": "front-bell", "setting": "anti_theft", "enabled": 1}),
-    ("doorbell_behavior_enabled_set", {"device": "front-bell", "setting": "anti_theft", "enabled": "true"}),
+    ("doorbell_anti_theft_set", {"device": "front-bell", "enabled": 1, "confirm": "setAntiTheftEnable front-bell"}),
+    ("doorbell_anti_theft_set", {"device": "front-bell", "enabled": "true", "confirm": "setAntiTheftEnable front-bell"}),
+    ("doorbell_auto_response_set", {"device": "front-bell", "enabled": True, "reply_id": "1", "delay": 5}),
     ("doorbell_ring_plan_set", {"device": "front-bell", "target": "hub", "enabled": True, "schedule": "2500-1700,127"}),
 ])
 async def test_mcp_input_types_and_bounds_do_not_coerce_unsafe_values(make_house, mcp, name, params):
@@ -475,3 +481,17 @@ async def test_mcp_input_types_and_bounds_do_not_coerce_unsafe_values(make_house
         result = await client.call_tool(name, params)
     assert result.is_error
     assert not caller.sent
+
+
+async def test_anti_theft_is_level_3_and_needs_its_confirmation(make_house):
+    from tolpo.calls import NeedsConfirmation
+    reg, caller = ready_house(make_house, tier=2)
+    with pytest.raises(Forbidden, match="level 3"):
+        await doorbell.anti_theft(reg, caller, "front-bell", True, "setAntiTheftEnable front-bell")
+    reg, caller = ready_house(make_house, tier=3)
+    for confirm in (None, "setAntiTheftEnable another-bell"):
+        with pytest.raises(NeedsConfirmation):
+            await doorbell.anti_theft(reg, caller, "front-bell", False, confirm)
+    assert "setAntiTheftEnable" not in caller.methods_sent()
+    out = await doorbell.anti_theft(reg, caller, "front-bell", False, "setAntiTheftEnable front-bell")
+    assert out["changed"] == {"anti_theft": False}

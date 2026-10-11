@@ -1,7 +1,7 @@
 # Doorbells and chimes
 
 These tools use the owner's authenticated local connection. Writes stay deny by default.
-Level 2 changes settings. Level 3 controls audible output or an electrical chime and requires the exact method and device
+Level 2 changes settings. Level 3 controls audible output, an electrical chime or the anti-theft alarm and requires the exact method and device
 id confirmation phrase on every call. Every successful write refreshes device state.
 
 - `doorbell_events_recent`: Poll last alarm, call state and child-scoped hub trigger logs as compact observations.
@@ -18,8 +18,8 @@ id confirmation phrase on every call. Every successful write refreshes device st
 - `doorbell_existing_chime_set`: Set the type and ring length of an in-wall chime at level 3.
 - `doorbell_quick_replies`: List stored voice reply ids, names, durations and read-only flags.
 - `doorbell_quick_reply`: Play or stop a visitor voice reply at level 3.
-- `doorbell_auto_response_set`: Select a stored automatic voice reply and its delay at level 2.
-- `doorbell_behavior_enabled_set`: Enable automatic replies or arm/disarm anti-theft protection at level 2.
+- `doorbell_auto_response_set`: Switch automatic voice replies on or off, or choose the reply and its delay, at level 2. One change per call.
+- `doorbell_anti_theft_set`: Arm or disarm the anti-theft alarm at level 3 with confirmation.
 - `doorbell_wake_up_set`: Select detection or button press as the wake-up trigger at level 2.
 - `doorbell_pre_wake`: Request pre-wake for a doorbell through its parent hub at level 2.
 - `doorbell_battery_mode_set`: Select performance, battery life or maximum power saving at level 2.
@@ -76,11 +76,13 @@ model using its installed chime specifications. Confirm with `setExistingChimeCf
 
 Voice play and automatic replies require an id listed by `getQuickRespList`. Playback does not force replacement of
 another reply. Confirm with `playQuickResp DEVICE_ID` or `stopQuickResp DEVICE_ID`. Check table shape, audible reply and
-stop behavior on a real doorbell. Auto response configuration and enable are separate settings so each is one write.
+stop behavior on a real doorbell. Auto response configuration and enable are separate device settings. The tool takes
+`enabled` alone or `reply_id` with `delay`, so each call is one write.
 UNVERIFIED: `play_interval` units and valid range. The API bounds it to 0 through 600. Check `getSmartRespStatus`,
 `getSmartRespConfig`, `setSmartRespStatus` and `setSmartRespConfig` on hardware.
 
-Arming anti-theft blocks factory reset by button. Check `getAntiTheftEnable`, `getAntiTheftStatus` and `setAntiTheftEnable`
+Anti-theft is level 3. Arming it blocks a factory reset by button. Disarming it turns off an alarm that protects the
+doorbell. Confirm with `setAntiTheftEnable DEVICE_ID`. Check `getAntiTheftEnable`, `getAntiTheftStatus` and `setAntiTheftEnable`
 on a real doorbell. This area does not reset a device or control its anti-theft alarm directly.
 UNVERIFIED: `getWakeUpConfig`/`setWakeUpConfig`, hub `setPreWakeup`, `getBatteryOperatingMode`/`setBatteryOperatingMode`
 and `getLedColor`/`setLedColor` support and behavior on D230/H200. Wake-up trades battery life for latency.
