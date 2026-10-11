@@ -538,22 +538,23 @@ TOOLS = [
     ("camera_ptz_auto_tracking", {"enabled": True}, "setTargetTrackConfig"),
     ("camera_image_read", {"setting": "osd"}, "getOsd"),
     ("camera_image_mode", {"setting": "style", "value": "bright"}, "setImageStyleConfig"),
-    ("camera_image_hdr", {"enabled": True}, "setHDR"),
+    ("camera_image_mode", {"setting": "hdr", "value": "on"}, "setHDR"),
     ("camera_image_osd", {"element": "time", "enabled": True}, "setOsd"),
     ("camera_image_privacy_zones", {"enabled": False, "confirm": "setCoverConfig hallway-cam"}, "setCoverConfig"),
     ("camera_image_led", {"enabled": False, "confirm": "setLedStatus hallway-cam"}, "setLedStatus"),
-    ("camera_system_privacy_status", {}, "getLensMaskConfig"),
+    ("camera_system_read", {"setting": "privacy"}, "getLensMaskConfig"),
     ("camera_system_privacy", {"enabled": False, "confirm": "setLensMaskConfig hallway-cam"}, "setLensMaskConfig"),
     ("camera_battery_read", {"setting": "battery_capability"}, "getBatteryCapability"),
     ("camera_battery_mode", {"setting": "power_mode", "value": "solar"}, "setPowerMode"),
     ("camera_battery_clips", {"length_seconds": 30, "buffer_seconds": 5, "retrigger_seconds": 10}, "setClipsConfig"),
-    ("camera_battery_wake_up", {"wake_type": "doorbell"}, "setWakeUpConfig"),
+    ("camera_battery_mode", {"setting": "wake_up", "value": "doorbell"}, "setWakeUpConfig"),
     ("camera_battery_charging_privacy", {"enabled": True, "confirm": "setChargingMode hallway-cam"}, "setChargingMode"),
     ("camera_battery_statistics", {"days": 2}, "getBatteryStatistic"),
     ("camera_audio_read", {"setting": "microphone"}, "getAudioConfig"),
-    ("camera_audio_volume", {"target": "microphone", "volume": 0}, "setMicrophoneVolume"),
-    ("camera_audio_record", {"enabled": False}, "setRecordAudio"),
-    ("camera_audio_voice_enhancement", {"enabled": True}, "setVoiceEnhancement"),
+    ("camera_audio_set", {"setting": "microphone", "volume": 0}, "setMicrophoneVolume"),
+    ("camera_audio_set", {"setting": "speaker", "volume": 70}, "setSpeakerVolume"),
+    ("camera_audio_set", {"setting": "record_audio", "enabled": False}, "setRecordAudio"),
+    ("camera_audio_set", {"setting": "voice_enhancement", "enabled": True}, "setVoiceEnhancement"),
     ("camera_system_read", {"setting": "account"}, "getThirdAccount"),
     ("camera_system_timezone", {"zone_id": "Etc/UTC"}, "setTimezone"),
     ("camera_system_upnp", {"enabled": True, "confirm": "setUpnpInfo hallway-cam"}, "setUpnpInfo"),
@@ -1226,3 +1227,32 @@ async def test_preset_delete_rejects_odd_preset_shapes(make_house, presets):
     with pytest.raises(DeviceUnavailable, match="getPresetConfig returned an unexpected response shape"):
         await area.ptz_action(reg, caller, "hallway-cam", "remove", ids=[1])
     assert "deletePreset" not in caller.methods_sent()
+
+
+@pytest.mark.parametrize("setting,volume,enabled", [("microphone", None, None), ("microphone", 50, True), ("speaker", None, False), ("record_audio", None, None), ("record_audio", 10, True), ("voice_enhancement", 5, None), ("other", 5, None)])
+async def test_audio_set_takes_exactly_the_matching_argument(make_house, setting, volume, enabled):
+    reg, caller = audio_house(make_house)
+    with pytest.raises(BadRequest):
+        await area.audio_set(reg, caller, "hallway-cam", setting, volume, enabled)
+    assert not any(m in area.WRITES for m in caller.methods_sent())
+
+
+@pytest.mark.parametrize("value,sent", [("on", 1), ("off", 0)])
+async def test_image_mode_hdr_takes_on_or_off(make_house, value, sent):
+    reg, caller = image_house(make_house, 2)
+    await area.image_mode(reg, caller, "hallway-cam", "hdr", value)
+    assert caller.sent[-1] == ("hallway-cam", "setHDR", {"video": {"set_hdr": {"secname": "main", "hdr": sent}}})
+    for bad_setting, bad_value in [("hdr", "true"), ("hdr", "1"), ("led", "off"), ("privacy", "off")]:
+        with pytest.raises(BadRequest):
+            await area.image_mode(reg, caller, "hallway-cam", bad_setting, bad_value)
+    assert caller.methods_sent().count("setHDR") == 1
+
+
+async def test_merged_tools_keep_their_levels(make_house, mcp):
+    """Merging tools must not move any method to another level or drop a confirmation."""
+    reg, caller = full_house(make_house, 1)
+    async with mcp(reg, caller) as client:
+        for name, arguments, method in [case for case in TOOLS if case[0] in {"camera_audio_set", "camera_battery_mode", "camera_image_mode"}]:
+            result = await client.call_tool(name, {"device": "hallway-cam", **arguments})
+            assert result.is_error and "level 2" in result.content[0].text, (name, arguments)
+            assert method not in caller.methods_sent()

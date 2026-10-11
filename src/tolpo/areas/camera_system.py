@@ -294,8 +294,11 @@ WRITES.update({m: (Tier.SETTING, s) for m, s in {
 # every area that declares it (camera_system, hub, device_admin), or the loader fails on merge.
 WRITES["setLedStatus"] = (Tier.SECURITY, "Change the camera indicator light. Off hides that the camera is recording.")
 WRITES["setCoverConfig"] = (Tier.SECURITY, "Enable or disable camera privacy zones. Off shows the blacked-out areas.")
-# The shared method catalog has no parameter-dependent tiers. Keep the whole
-# lens-mask method at SECURITY until the shared caller can distinguish ON (1).
+# The shared method catalog has no parameter-dependent levels, so the whole lens-mask method is level 3. Closing the
+# mask at level 1 would need, in the shared files: a MethodRule field that maps params to a level (here: enabled "on"
+# is CONTROL, anything else SECURITY, unknown shapes the higher one); Caller.check and call_many passing params to it;
+# Caller.plan taking params; and a confirmation phrase that names the direction, so a phrase given for ON cannot be
+# reused for OFF. Until then failing closed (level 3 both ways) is the safe choice.
 WRITES["setLensMaskConfig"] = (Tier.SECURITY, "Change camera privacy mode.")
 
 
@@ -375,6 +378,17 @@ async def image_change(registry, caller, device, setting, value, confirm=None):
         method = {"led": "setLedStatus", "privacy": "setLensMaskConfig", "privacy_zones": "setCoverConfig"}[setting]
         return await write(registry, caller, entry, method, spec.module, spec.section, {"enabled": flag}, {setting: value}, confirm)
     raise BadRequest("Unknown image setting")
+
+
+async def image_mode(registry, caller, device, setting, value):
+    """camera_image_mode: HDR takes on or off, the other modes take a value from the camera's reported range."""
+    if setting == "hdr":
+        if value not in ("on", "off"):
+            raise BadRequest("HDR must be on or off")
+        value = value == "on"
+    elif setting not in {"night_vision", "flip", "style"}:
+        raise BadRequest("Unknown image mode")
+    return await image_change(registry, caller, device, setting, value)
 
 
 async def osd_change(registry, caller, device, element, enabled, text=None):
@@ -520,6 +534,19 @@ async def audio_change(registry, caller, device, setting, value):
         payload = {"enabled": switch(value)}
         method = "setRecordAudio" if setting == "record_audio" else "setVoiceEnhancement"
     return await write(registry, caller, entry, method, spec.module, spec.section, payload, {setting: value})
+
+
+async def audio_set(registry, caller, device, setting, volume=None, enabled=None):
+    """camera_audio_set: volumes take `volume`, switches take `enabled`. The other argument must be left out."""
+    if setting in {"microphone", "speaker"}:
+        if volume is None or enabled is not None:
+            raise BadRequest(f"{setting} takes volume and no enabled value")
+        return await audio_change(registry, caller, device, setting, volume)
+    if setting in {"record_audio", "voice_enhancement"}:
+        if enabled is None or volume is not None:
+            raise BadRequest(f"{setting} takes enabled and no volume")
+        return await audio_change(registry, caller, device, setting, enabled)
+    raise BadRequest("Unknown audio setting")
 
 
 READS.update({
@@ -695,14 +722,9 @@ def tools(ctx):
         return await run(read_setting, device, setting)
 
     @ctx.tool(title="Camera image mode", tier=Tier.SETTING)
-    async def camera_image_mode(device: Device, setting: Annotated[Literal["night_vision", "flip", "style"], Field(description="Image mode to change")], value: Annotated[str, Field(description="Exact mode from camera_image_read capability values", max_length=64)]) -> dict[str, Any]:
-        """Set night vision, flip or mirror, or image style within the reported range."""
-        return await run(image_change, device, setting, value)
-
-    @ctx.tool(title="Camera HDR", tier=Tier.SETTING)
-    async def camera_image_hdr(device: Device, enabled: Annotated[bool, Field(description="Enable HDR for the main video stream")]) -> dict[str, Any]:
-        """Set main-stream HDR after checking the camera's supported HDR values."""
-        return await run(image_change, device, "hdr", enabled)
+    async def camera_image_mode(device: Device, setting: Annotated[Literal["night_vision", "flip", "style", "hdr"], Field(description="Image mode to change")], value: Annotated[str, Field(description="Exact mode from camera_image_read capability values. For hdr: on or off", max_length=64)]) -> dict[str, Any]:
+        """Set night vision, flip or mirror, image style or main-stream HDR within the camera's reported values."""
+        return await run(image_mode, device, setting, value)
 
     @ctx.tool(title="Camera video overlay", tier=Tier.SETTING)
     async def camera_image_osd(device: Device, element: Annotated[Literal["time", "name", "logo"], Field(description="Overlay to change")], enabled: Annotated[bool, Field(description="Show this overlay")], text: Annotated[str | None, Field(description="Plain name overlay text, or keep existing text", max_length=64)] = None) -> dict[str, Any]:
@@ -721,14 +743,10 @@ def tools(ctx):
         directions, because a dark LED hides that the camera records."""
         return await run(image_change, device, "led", enabled, confirm)
 
-    @ctx.tool(title="Camera privacy status")
-    async def camera_system_privacy_status(device: Device) -> dict[str, Any]:
-        """Read whether the camera lens mask is enabled."""
-        return await run(read_setting, device, "privacy")
-
     @ctx.tool(title="Camera privacy mode", tier=Tier.SECURITY)
     async def camera_system_privacy(device: Device, enabled: Annotated[bool, Field(description="True closes the lens mask. False allows streaming and recording")], confirm: Confirm = None) -> dict[str, Any]:
-        """Change the lens mask with confirmation. Both directions currently need level 3."""
+        """Close or open the lens mask with level 3 confirmation. Opening it lets the camera stream and record.
+        Closing it needs the same confirmation for now. Read the current state with camera_system_read privacy."""
         return await run(image_change, device, "privacy", enabled, confirm)
 
 
@@ -738,19 +756,15 @@ def tools(ctx):
         return await run(read_setting, device, setting)
 
     @ctx.tool(title="Camera battery mode", tier=Tier.SETTING)
-    async def camera_battery_mode(device: Device, setting: Annotated[Literal["power_mode", "working_mode"], Field(description="Power source or working mode")], value: Annotated[str, Field(description="Exact mode from the reported battery capability range", max_length=64)]) -> dict[str, Any]:
-        """Change a supported battery mode. Custom working parameters are kept by the camera."""
+    async def camera_battery_mode(device: Device, setting: Annotated[Literal["power_mode", "working_mode", "wake_up"], Field(description="Power source, working mode or wake-up trigger")], value: Annotated[str, Field(description="Exact mode from the reported battery capability range. For wake_up: detection or doorbell", max_length=64)]) -> dict[str, Any]:
+        """Change a supported battery mode or the event that wakes the camera. Custom working parameters are kept by
+        the camera. Choosing a wake-up trigger does not wake a sleeping camera. BLE may be needed for that."""
         return await run(battery_change, device, setting, value)
 
     @ctx.tool(title="Camera clip duration", tier=Tier.SETTING)
     async def camera_battery_clips(device: Device, length_seconds: Annotated[int, Field(description="Maximum clip length. The camera may enforce a narrower range", ge=1, le=3600)], buffer_seconds: Annotated[int, Field(description="Recording buffer in seconds", ge=0, le=3600)], retrigger_seconds: Annotated[int, Field(description="Time before another clip can start", ge=0, le=3600)]) -> dict[str, Any]:
         """Change clip length, recording buffer and retrigger time on supported battery cameras."""
         return await run(clips_change, device, length_seconds, buffer_seconds, retrigger_seconds)
-
-    @ctx.tool(title="Camera wake-up behavior", tier=Tier.SETTING)
-    async def camera_battery_wake_up(device: Device, wake_type: Annotated[Literal["detection", "doorbell"], Field(description="Event type that wakes the camera")]) -> dict[str, Any]:
-        """Choose a wake-up trigger. This does not wake a sleeping camera. BLE may be needed."""
-        return await run(battery_change, device, "wake_up", wake_type)
 
     @ctx.tool(title="Camera charging privacy", tier=Tier.SECURITY)
     async def camera_battery_charging_privacy(device: Device, enabled: Annotated[bool, Field(description="Keep the lens masked while charging")], confirm: Confirm = None) -> dict[str, Any]:
@@ -768,25 +782,21 @@ def tools(ctx):
         """Read microphone, speaker, recording audio and noise processing settings."""
         return await run(read_setting, device, setting)
 
-    @ctx.tool(title="Camera audio volume", tier=Tier.SETTING)
-    async def camera_audio_volume(device: Device, target: Annotated[Literal["microphone", "speaker"], Field(description="Volume to change")], volume: Annotated[int, Field(description="Volume from 0 (mute) to 100", ge=0, le=100)]) -> dict[str, Any]:
-        """Set microphone or speaker volume. This does not play any sound."""
-        return await run(audio_change, device, target, volume)
-
-    @ctx.tool(title="Camera recording audio", tier=Tier.SETTING)
-    async def camera_audio_record(device: Device, enabled: Annotated[bool, Field(description="Include microphone audio with camera recordings")]) -> dict[str, Any]:
-        """Enable or disable microphone audio in recordings."""
-        return await run(audio_change, device, "record_audio", enabled)
-
-    @ctx.tool(title="Camera voice enhancement", tier=Tier.SETTING)
-    async def camera_audio_voice_enhancement(device: Device, enabled: Annotated[bool, Field(description="Enable supported voice enhancement")]) -> dict[str, Any]:
-        """Change the supported voice enhancement option."""
-        return await run(audio_change, device, "voice_enhancement", enabled)
+    @ctx.tool(title="Camera audio setting", tier=Tier.SETTING)
+    async def camera_audio_set(
+        device: Device,
+        setting: Annotated[Literal["microphone", "speaker", "record_audio", "voice_enhancement"], Field(description="microphone or speaker take volume. record_audio and voice_enhancement take enabled")],
+        volume: Annotated[int | None, Field(description="Volume from 0 (minimum) to 100, for microphone or speaker", ge=0, le=100)] = None,
+        enabled: Annotated[bool | None, Field(description="On or off, for record_audio or voice_enhancement")] = None,
+    ) -> dict[str, Any]:
+        """Set microphone or speaker volume, whether recordings include microphone audio, or voice enhancement.
+        This plays no sound."""
+        return await run(audio_set, device, setting, volume, enabled)
 
 
     @ctx.tool(title="Camera system settings")
-    async def camera_system_read(device: Device, setting: Annotated[Literal["timezone", "clock", "wifi", "upnp", "compatibility", "account", "reboot_schedule", "firmware", "firmware_status", "firmware_capability", "auto_update"], Field(description="Safe system setting to read")]) -> dict[str, Any]:
-        """Read time, signal, network exposure or firmware state. Login and network identities are hidden."""
+    async def camera_system_read(device: Device, setting: Annotated[Literal["privacy", "timezone", "clock", "wifi", "upnp", "compatibility", "account", "reboot_schedule", "firmware", "firmware_status", "firmware_capability", "auto_update"], Field(description="Safe system setting to read")]) -> dict[str, Any]:
+        """Read privacy mode, time, signal, network exposure or firmware state. Login and network identities are hidden."""
         return await run(read_setting, device, setting)
 
     @ctx.tool(title="Camera time zone", tier=Tier.SETTING)
