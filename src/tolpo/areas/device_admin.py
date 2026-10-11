@@ -373,7 +373,7 @@ def _load_map(path):
     try:
         if path.stat().st_size > 1024 * 1024:
             raise ValueError
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or data.get("version") != 1 or set(data) != {"version", "rooms", "groups"}:
             raise ValueError
         for collection in ("rooms", "groups"):
@@ -389,7 +389,7 @@ def _load_map(path):
         return data
     except FileNotFoundError:
         return {"version": 1, "rooms": {}, "groups": {}}
-    except (OSError, ValueError, TypeError, RegistryError):
+    except (OSError, ValueError, TypeError, UnicodeDecodeError, RegistryError):
         raise RegistryError("The local rooms file is unreadable or invalid; it was not replaced.") from None
 
 
@@ -415,7 +415,7 @@ def _locked_map():
     path = _state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with open(path.with_suffix(".lock"), "a") as lock:
+        with os.fdopen(os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600), "r+") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             data = _load_map(path)
             yield data
@@ -423,7 +423,7 @@ def _locked_map():
                 raise RegistryError("At most 256 rooms and 256 groups can be stored.")
             fd, temporary = tempfile.mkstemp(prefix=".rooms-", dir=path.parent)
             try:
-                with os.fdopen(fd, "w") as stream:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
                     json.dump(data, stream, ensure_ascii=False)
                     stream.flush()
                     os.fsync(stream.fileno())

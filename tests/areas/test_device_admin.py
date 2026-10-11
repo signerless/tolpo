@@ -341,6 +341,7 @@ async def test_local_rooms_and_groups_persist_case_insensitive_and_assign_exact_
         assert admin.local_collection(reg, kind, "list") == {kind: [{"name": "Office", "devices": ["desk-lamp", "office-1"]}]}
     assert admin.resolve_room("office") == ["desk-lamp", "office-1"]
     assert state.stat().st_mode & 0o777 == 0o600
+    assert state.with_suffix(".lock").stat().st_mode & 0o777 == 0o600
     assert json.loads(state.read_text())["version"] == 1
     assert caller.sent == []
     for kind in ("rooms", "groups"):
@@ -381,6 +382,17 @@ async def test_local_validation_duplicates_missing_and_no_partial_assignment(hou
         with pytest.raises(RegistryError):
             admin.local_collection(reg, "rooms", action, name, new, devices)
         assert state.read_text() == original
+
+
+async def test_non_ascii_names_round_trip_in_utf8(house, state, monkeypatch):
+    reg, caller, _ = house()
+    admin.local_collection(reg, "rooms", "create", "Küche")
+    assert "Küche" in state.read_bytes().decode("utf-8")
+    assert admin.local_collection(reg, "rooms", "list") == {"rooms": [{"name": "Küche", "devices": []}]}
+    state.write_bytes(b"\xff\xfe{")
+    with pytest.raises(RegistryError, match="unreadable"):
+        admin.local_collection(reg, "rooms", "create", "A")
+    assert state.read_bytes() == b"\xff\xfe{"
 
 
 @pytest.mark.parametrize("contents", ["{", '{}', '{"version":2,"rooms":{},"groups":{}}',
