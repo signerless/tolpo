@@ -174,12 +174,27 @@ async def test_firmware_read_cached_notes_check_and_progress(house):
     assert progress["download_progress"] == 30 and progress["auto_upgrade"] is False
 
 
+AUTO_OK = "set_auto_update_info desk-lamp"
+
+
 async def test_firmware_auto_preserves_omitted_fields(house):
     reg, caller, _ = house()
-    await admin.firmware_auto_update(reg, caller, "desk-lamp", True)
+    await admin.firmware_auto_update(reg, caller, "desk-lamp", True, confirm=AUTO_OK)
     assert caller.sent[-1][1:] == ("set_auto_update_info", {**AUTO, "enable": True})
-    await admin.firmware_auto_update(reg, caller, "desk-lamp", False, 0, 0)
+    await admin.firmware_auto_update(reg, caller, "desk-lamp", False, 0, 0, confirm=AUTO_OK)
     assert caller.sent[-1][2] == {"enable": False, "time": 0, "random_range": 0}
+
+
+async def test_firmware_auto_update_is_level_four_and_confirmed_before_any_wire_call(house):
+    reg, caller, _ = house(3)
+    with pytest.raises(Forbidden):
+        await admin.firmware_auto_update(reg, caller, "desk-lamp", True, confirm=AUTO_OK)
+    assert caller.sent == []
+    reg, caller, _ = house()
+    for confirm in (None, "set_auto_update_info office-1", "fw_download desk-lamp"):
+        with pytest.raises(NeedsConfirmation):
+            await admin.firmware_auto_update(reg, caller, "desk-lamp", False, confirm=confirm)
+        assert caller.sent == []
 
 
 @pytest.mark.parametrize("enabled,time,spread", [("true", None, None), (True, -1, None), (True, None, 1440), (True, True, None)])
@@ -217,7 +232,7 @@ WRITE_CASES = [
     (admin.device_clock, "hallway-cam", ("Etc/UTC",), "setTimezone"),
     (admin.device_led, "desk-lamp", ("never",), "set_led_info"),
     (admin.device_led, "hallway-cam", ("never",), "setLedStatus"),
-    (admin.firmware_auto_update, "desk-lamp", (True,), "set_auto_update_info"),
+    (admin.firmware_auto_update, "desk-lamp", (True, None, None, "set_auto_update_info desk-lamp"), "set_auto_update_info"),
     (admin.firmware_install, "desk-lamp", ("2.0", "fw_download desk-lamp"), "fw_download"),
 ]
 
@@ -228,7 +243,7 @@ async def test_every_device_write_refused_below_its_level(house, fn, device, arg
     with pytest.raises(Forbidden) as caught:
         await fn(reg, caller, device, *args)
     assert method not in caller.methods_sent()
-    if method == "fw_download":
+    if method in ("fw_download", "set_auto_update_info"):
         assert caller.sent == []
     assert not any(s in str(caught.value) for s in ("allow_methods", "TOLPO_", "config"))
 
@@ -303,7 +318,7 @@ async def test_firmware_v1_no_auto_methods(house):
     result = await admin.firmware_info(reg, caller, "desk-lamp")
     assert "auto_update" not in result and "get_auto_update_info" not in caller.methods_sent()
     with pytest.raises(Unsupported):
-        await admin.firmware_auto_update(reg, caller, "desk-lamp", True)
+        await admin.firmware_auto_update(reg, caller, "desk-lamp", True, confirm=AUTO_OK)
 
 
 async def test_unavailable_after_successful_write_reported(house, monkeypatch):
@@ -442,7 +457,7 @@ async def test_every_tool_mcp_schema_happy_path_and_doc(house, mcp, state):
         ("firmware_get", {"device": "desk-lamp"}),
         ("firmware_check", {"device": "desk-lamp"}),
         ("firmware_progress", {"device": "desk-lamp"}),
-        ("firmware_set_auto_update", {"device": "desk-lamp", "enabled": True, "time": 0, "random_range": 0}),
+        ("firmware_set_auto_update", {"device": "desk-lamp", "enabled": True, "time": 0, "random_range": 0, "confirm": AUTO_OK}),
         ("firmware_install_update", {"device": "desk-lamp", "version": "2.0", "confirm": "fw_download desk-lamp"}),
         ("device_diagnostics", {"device": "desk-lamp"}),
         ("device_third_party_compatibility", {}),
@@ -464,9 +479,12 @@ async def test_every_tool_mcp_schema_happy_path_and_doc(house, mcp, state):
             assert not result.is_error, (name, result)
             assert isinstance(result.structured_content, dict)
         assert definitions["firmware_install_update"].annotations.destructive_hint
+        assert definitions["firmware_set_auto_update"].annotations.destructive_hint
         assert definitions["room_list"].annotations.read_only_hint
         denied = await client.call_tool("firmware_install_update", {"device": "desk-lamp", "version": "2.0"})
         assert denied.is_error and "confirm" in denied.content[0].text
+        denied = await client.call_tool("firmware_set_auto_update", {"device": "desk-lamp", "enabled": False})
+        assert denied.is_error and AUTO_OK in denied.content[0].text
         invalid = await client.call_tool("device_set_led", {"device": "desk-lamp", "rule": "night_mode", "start": 1440, "end": 10})
         assert invalid.is_error
 

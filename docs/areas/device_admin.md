@@ -1,6 +1,9 @@
 # Device administration, firmware, rooms and groups
 
 All device traffic uses the shared guarded caller. Reads are level 0. Settings are level 2.
+Changing automatic firmware updates is level 4 and needs `confirm="set_auto_update_info <device slug>"`.
+When automatic updates are on, the device installs firmware and reboots by itself. When they are off,
+it stops getting fixes. Both are firmware lifecycle changes.
 Firmware installation is level 4 and needs `confirm="fw_download <device slug>"` plus the exact
 available version. It checks that version again before starting. The device fetches the image itself.
 The tool reports a start request, not a completed upgrade. Read progress separately. A device may
@@ -15,7 +18,7 @@ reboot before refresh succeeds; that is reported without retrying the write.
 - `firmware_get`: Read SMART versions, automatic update settings and any locally cached release notes.
 - `firmware_check`: Ask a SMART device to check for an update. Read its returned version and release notes.
 - `firmware_progress`: Read SMART firmware download and upgrade state without polling or retrying.
-- `firmware_set_auto_update`: Set the SMART auto-update switch, start minute and random spread. Omitted window fields stay unchanged.
+- `firmware_set_auto_update`: Set the SMART auto-update switch, start minute and random spread, after exact device confirmation. Omitted window fields stay unchanged.
 - `firmware_install_update`: Start one SMART firmware install after exact device confirmation and a version check.
 - `device_diagnostics`: Read versions, available signal and runtime counters and up to 100 components. Export no logs.
 - `device_third_party_compatibility`: Explain the account compatibility switch and report that its value cannot be detected locally.

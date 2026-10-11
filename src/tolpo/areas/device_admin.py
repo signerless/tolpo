@@ -39,7 +39,9 @@ METHODS = [
     policy.method("setLedStatus", Tier.SETTING, CAM_DIALECT_KINDS, "Change the camera indicator LED state."),
     policy.method("get_latest_fw", Tier.READ, SMART_KINDS, "Ask the device to check for firmware updates."),
     policy.method("get_auto_update_info", Tier.READ, SMART_KINDS, "Read automatic firmware update settings."),
-    policy.method("set_auto_update_info", Tier.SETTING, SMART_KINDS, "Change automatic firmware updates and their window."),
+    # Turning automatic updates on lets the device install firmware and reboot unattended, and turning them off stops
+    # security fixes. The audit groups both with firmware installation, and the camera firmware switch is level 4 too.
+    policy.method("set_auto_update_info", Tier.LIFECYCLE, SMART_KINDS, "Change automatic firmware updates and their window."),
     policy.method("get_fw_download_state", Tier.READ, SMART_KINDS, "Read firmware download and upgrade progress."),
     policy.method("fw_download", Tier.LIFECYCLE, SMART_KINDS, "Install firmware fetched by the device and reboot it."),
 ]
@@ -48,6 +50,7 @@ DeviceRef = Annotated[str, Field(description="Device slug or exact name")]
 Name = Annotated[str, Field(description="Local room or group name", min_length=1, max_length=64)]
 Minute = Annotated[int, Field(description="Minutes after local midnight", ge=0, le=1439, strict=True)]
 Confirm = Annotated[str | None, Field(description="Exact phrase: fw_download <device slug>")]
+AutoConfirm = Annotated[str | None, Field(description="Exact phrase: set_auto_update_info <device slug>")]
 
 
 def _name(value: str) -> str:
@@ -263,7 +266,7 @@ async def firmware_info(registry, caller, device, check=False, progress=False):
     return out
 
 
-async def firmware_auto_update(registry, caller, device, enabled, time=None, random_range=None):
+async def firmware_auto_update(registry, caller, device, enabled, time=None, random_range=None, confirm=None):
     entry = registry.resolve_one(device)
     _firmware(entry, auto=True)
     if type(enabled) is not bool:
@@ -271,6 +274,12 @@ async def firmware_auto_update(registry, caller, device, enabled, time=None, ran
     for value in (time, random_range):
         if value is not None and (type(value) is not int or not 0 <= value <= 1439):
             raise RegistryError("Window values must be minutes from 0 to 1439.")
+    # Refuse before the read, so a blocked or unconfirmed change sends nothing.
+    plan = caller.plan(entry, "set_auto_update_info")
+    if not plan["allowed"]:
+        raise Forbidden("Changing automatic firmware updates is a level 4 action and the owner's policy blocks it.")
+    if confirm != plan.get("confirm"):
+        raise NeedsConfirmation(f"Changing automatic firmware updates requires confirm='set_auto_update_info {clean(entry.slug)}'.")
     current = await _call(caller, entry, "get_auto_update_info")
     params = _pick(current, ("enable", "time", "random_range"))
     params["enable"] = enabled
@@ -278,7 +287,7 @@ async def firmware_auto_update(registry, caller, device, enabled, time=None, ran
         params["time"] = time
     if random_range is not None:
         params["random_range"] = random_range
-    return await _write(registry, caller, entry, "set_auto_update_info", params, changed={"auto_update": params})
+    return await _write(registry, caller, entry, "set_auto_update_info", params, changed={"auto_update": params}, confirm=confirm)
 
 
 async def firmware_install(registry, caller, device, version, confirm=None):
@@ -539,12 +548,14 @@ def tools(ctx):
         """Read SMART firmware download and install progress. No polling or retries."""
         return await run(firmware_info, device, progress=True)
 
-    @ctx.tool(title="Automatic firmware updates", tier=Tier.SETTING)
+    @ctx.tool(title="Automatic firmware updates", tier=Tier.LIFECYCLE)
     async def firmware_set_auto_update(device: DeviceRef, enabled: Annotated[bool, Field(description="Enable automatic updates", strict=True)],
                                        time: Minute | None = None,
-                                       random_range: Annotated[int | None, Field(description="Random spread in minutes", ge=0, le=1439, strict=True)] = None) -> dict[str, Any]:
-        """Change SMART automatic updates. Omitted window fields keep their current values."""
-        return await run(firmware_auto_update, device, enabled, time, random_range)
+                                       random_range: Annotated[int | None, Field(description="Random spread in minutes", ge=0, le=1439, strict=True)] = None,
+                                       confirm: AutoConfirm = None) -> dict[str, Any]:
+        """Change SMART automatic updates with confirmation. When on, the device installs firmware and reboots by itself.
+        Omitted window fields keep their current values."""
+        return await run(firmware_auto_update, device, enabled, time, random_range, confirm)
 
     @ctx.tool(title="Install firmware", tier=Tier.LIFECYCLE)
     async def firmware_install_update(device: DeviceRef, version: Annotated[str, Field(description="Exact available firmware version to install", min_length=1, max_length=128)],
