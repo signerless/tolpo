@@ -6,7 +6,7 @@ and the app protocol audit. Model and firmware support still need real-device ch
 Every request uses the declared-method caller on the owner's existing local session.
 No discovery, onboarding or transport is added here. There are no HTTP routes.
 
-Start, pause, return, targeted cleaning and task starts are level 1. Cleaning
+Start, pause, return, stop, targeted cleaning and task group starts are level 1. Cleaning
 preferences, volume, dust collection, schedules and quiet hours are level 2.
 Locate and child lock are level 3. Resetting a wear counter is level 4 because it
 erases history. Level 3 and 4 calls require the exact device method and robot id
@@ -19,10 +19,7 @@ state. A failed refresh is reported as stale state. It does not undo the write.
 - `vacuum_start`: Start a new standard whole-home job. Level 1. Use pause with `paused=false` to resume.
 - `vacuum_pause`: Pause or resume the current job with `paused`. Level 1.
 - `vacuum_return_home`: Return to the charging dock or cancel return with `returning`. Level 1.
-- `vacuum_suction`: Set global suction: 0 off, 1 quiet, 2 standard, 3 turbo, 4 max, 5 ultra. Level 2.
-- `vacuum_water_level`: Set global mop water: 0 off, 1 low, 2 medium, 3 high. Level 2.
-- `vacuum_passes`: Set one to three global cleaning passes. Level 2.
-- `vacuum_carpet_boost`: Enable or disable suction boost on carpet. Level 2.
+- `vacuum_preferences`: Change any of the global cleaning preferences in one call. Level 2. Suction: 0 off, 1 quiet, 2 standard, 3 turbo, 4 max, 5 ultra. Water level: 0 off, 1 low, 2 medium, 3 high. Passes: 1 to 3. Cleaning type: 0 vacuum and mop, 1 mop, 2 vacuum, 3 vacuum then mop, 4 AI. Route density: 1 daily, 2 fast, 3 meticulous. Carpet boost: on or off. Only the given ones change. Each is sent as its own request, the shape python-kasa uses. If one fails, the error names the ones already changed.
 - `vacuum_empty_bin`: Run dust collection at a compatible dock. Level 2.
 - `vacuum_auto_empty`: Enable or disable automatic emptying and choose 0 smart, 1 light, 2 balanced or 3 max. Preserve known frequency. Level 2.
 - `vacuum_volume`: Set speaker volume from 0 to 100. Level 2.
@@ -31,18 +28,14 @@ state. A failed refresh is reported as stale state. It does not undo the write.
 - `vacuum_consumables`: Read wear in minutes and estimated remaining time. Level 0. Lifetimes are python-kasa assumptions, not device guarantees.
 - `vacuum_reset_consumable`: Reset one replaced or cleaned part's wear counter. Level 4. Confirm with `resetConsumablesTime <robot id>`.
 - `vacuum_records`: Read totals, last clean and up to 32 history records. Level 0. Times can reveal presence patterns.
-- `vacuum_stop`: UNVERIFIED: try ending the job with `setSwitchClean` and `clean_on=false`. Level 1. A stop-button trace is needed.
+- `vacuum_stop`: End the current job with `setSwitchClean` and `clean_on=false`. Level 1. UNVERIFIED on a device. The decompiled app's stop sends the same request.
 - `vacuum_spot`: Start mode 2 around the robot's current position. Level 1.
 - `vacuum_clean_rooms`: Start mode 3 in selected rooms on an explicit map. Level 1. Uses global preferences.
 - `vacuum_zones`: Start mode 4 in up to 16 rectangles with per-zone preferences. Level 1. Requires known map coordinates and units.
 - `vacuum_preset`: Start mode 5 with an existing custom rule id and its map id. Level 1.
-- `vacuum_task`: UNVERIFIED: run a room task with `runCleanTask` and mode 6. Level 1. Check the request shape and use of global settings on a robot.
 - `vacuum_task_group`: Start an existing saved task group with `startCleanTaskGroup`. Level 1. This corresponds to mode 7 without guessing a mode-7 `setSwitchClean` payload.
-- `vacuum_cleaning_type`: Set global type: 0 vacuum and mop, 1 mop, 2 vacuum, 3 vacuum then mop, 4 AI. Level 2.
-- `vacuum_route_density`: Set global route spacing: 1 daily, 2 fast, 3 meticulous. Level 2.
 - `vacuum_maps`: Read saved map metadata and the current map id. Level 0. Decode and flatten map names.
-- `vacuum_current_map`: Read current map metadata and rooms. Level 0. The bitmap is not decoded or returned.
-- `vacuum_rooms`: Read room ids, names and preferences from an explicit map or the current map. Level 0.
+- `vacuum_map`: Read one map's metadata and its room ids, names and preferences. Omit the map id for the current map. Level 0. The bitmap is not decoded or returned.
 - `vacuum_schedules`: Read one schedule page from a start index, capped at 32 rules. Level 0. Weekdays stay as raw protocol values.
 - `vacuum_set_schedule`: UNVERIFIED: add or edit a repeating room schedule with a raw weekday value and local start minute. Level 2. Uses vacuum-only defaults.
 - `vacuum_remove_schedule`: Remove one existing schedule id. Level 2. Never removes all schedules.
@@ -91,6 +84,11 @@ The error table covers 1 to 45. The prompt table covers all 26 app codes, includ
 reduced to the first entry. Code 8 means sleep, error 4 means wheel lifted and
 error 15 means tilting, matching the app's names rather than older library labels.
 
+Newer models start and stop through `runCleanTask` instead of `setSwitchClean`.
+The decompiled app picks it by model. tolpo does not send `runCleanTask`, so start,
+stop and targeted cleaning may not work on those models. The app's task mode 6 was
+not found in a request, so there is no task start.
+
 Not done: map edits, room split or merge, map deletion, no-go zone and virtual
 wall writes, dock wash, dry or hair-cut, voice packs, map backup, manual drive,
 TPAP, BLE onboarding, cloud passthrough, firmware and factory reset. Manual drive
@@ -98,7 +96,7 @@ has no proven bounded duration or safe stop behavior. Signed download features
 need cloud URLs. No app keys, credentials or code are reproduced.
 
 Real-device verification must check the camelCase methods on the specific model,
-start and pause versus resume behavior, the inferred stop command, zone coordinate
-units, preset and task starts, module-dependent dock and mop reads, schedule day
+start and pause versus resume behavior, the stop command, zone coordinate
+units, preset and task group starts, module-dependent dock and mop reads, schedule day
 and time encoding and conflict behavior, and quiet-hour suppression. Test all
 writes with the owner's own robot and account before relying on them.

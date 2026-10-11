@@ -27,7 +27,6 @@ _CONTROLS = {
     "setSwitchClean": "Start or stop a cleaning job.",
     "setRobotPause": "Pause or resume a cleaning job.",
     "setSwitchCharge": "Return to the dock or cancel the return.",
-    "runCleanTask": "Run a cleaning task with supplied room settings.",
     "startCleanTaskGroup": "Start a saved cleaning task group.",
 }
 _SETTINGS = {
@@ -180,8 +179,7 @@ async def read(caller, entry, method, params=None):
     return result
 
 
-async def write(registry, caller, device, method, params, confirm=None, note=None):
-    entry = entry_for(registry, device)
+async def _send(caller, entry, method, params, confirm=None):
     try:
         result = await caller.call(entry, method, params, confirm=confirm)
     except DeviceUnavailable as exc:
@@ -189,12 +187,23 @@ async def write(registry, caller, device, method, params, confirm=None, note=Non
         raise DeviceUnavailable(f"{clean(entry.slug)}: {method} failed ({reason})") from None
     if not isinstance(result, dict) or result.get("error_code", 0) != 0:
         raise DeviceUnavailable(f"{clean(entry.slug)}: {method} reported an error")
+    return result
+
+
+async def _refreshed(registry, entry, changed, note=None):
     await registry.refresh(entry, force=True)
-    out = {"id": clean(entry.slug), "changed": params}
+    out = {"id": clean(entry.slug), "changed": changed}
     if note:
         out["note"] = note
     if not entry.online:
         out["refresh_error"] = f"{clean(entry.slug)}: state refresh failed ({clean(entry.error or 'unreachable')})"
+    return out
+
+
+async def write(registry, caller, device, method, params, confirm=None, note=None):
+    entry = entry_for(registry, device)
+    result = await _send(caller, entry, method, params, confirm)
+    out = await _refreshed(registry, entry, params, note)
     if method in ("addScheduleRule", "editScheduleRule"):
         # The device's schedule id goes under its own key. It must never replace the robot id, or an agent could
         # address its next command to whatever text the device returned.
@@ -294,12 +303,38 @@ class Zone(BaseModel):
         return {"type": "area", **self.model_dump()}
 
 
-async def attribute(registry, caller, device, key, value):
-    bounds = {"suction": (0, 5), "cistern": (0, 3), "clean_number": (1, 3), "clean_type": (0, 4), "density": (1, 3)}
-    if key not in bounds:
-        raise BadRequest("unknown cleaning preference")
-    integer(value, *bounds[key], key)
-    return await write(registry, caller, device, "setCleanAttr", {"type": "global", key: value})
+PREFERENCES = {  # tool argument: (protocol key in setCleanAttr, lowest, highest)
+    "suction": ("suction", 0, 5), "water_level": ("cistern", 0, 3), "passes": ("clean_number", 1, 3),
+    "cleaning_type": ("clean_type", 0, 4), "route_density": ("density", 1, 3),
+}
+
+
+async def preferences(registry, caller, device, values, carpet_boost=None):
+    """Each preference is its own request, the shape python-kasa sends. All are validated before any is sent."""
+    calls = []
+    for name, value in values.items():
+        if name not in PREFERENCES:
+            raise BadRequest("unknown cleaning preference")
+        if value is not None:
+            key, lo, hi = PREFERENCES[name]
+            calls.append(("setCleanAttr", {"type": "global", key: integer(value, lo, hi, name)}))
+    if carpet_boost is not None:
+        calls.append(("setCarpetClean", {"carpet_clean_prefer": "boost" if boolean(carpet_boost, "carpet boost") else "normal"}))
+    if not calls:
+        raise BadRequest("give at least one preference to change")
+    entry = entry_for(registry, device)
+    changed = {}
+    for method, params in calls:
+        try:
+            await _send(caller, entry, method, params)
+        except DeviceUnavailable as exc:
+            if not changed:
+                raise
+            await registry.refresh(entry, force=True)
+            done = ", ".join(k for k in changed if k != "type")
+            raise DeviceUnavailable(f"{exc}. Already changed before the failure: {done}") from None
+        changed.update(params)
+    return await _refreshed(registry, entry, changed)
 
 
 async def auto_empty(registry, caller, device, enabled, mode):
@@ -307,7 +342,9 @@ async def auto_empty(registry, caller, device, enabled, mode):
     boolean(enabled, "enabled")
     integer(mode, 0, 3, "auto empty mode")
     # Preserve the known frequency field, never echo arbitrary device fields into a write.
-    old = project(await read(caller, entry, "getDustCollectionInfo", {}), ("dust_freq",))
+    old = {}
+    if type(freq := (await read(caller, entry, "getDustCollectionInfo", {})).get("dust_freq")) is int and 0 <= freq <= 100:
+        old["dust_freq"] = freq
     return await write(registry, caller, device, "setDustCollectionInfo", {
         **old, "auto_dust_collection": enabled, "dust_collection_mode": mode,
     })
@@ -363,7 +400,7 @@ async def maps(registry, caller, device):
     return out
 
 
-async def map_data(registry, caller, device, map_id=None, rooms_only=False):
+async def map_data(registry, caller, device, map_id=None):
     entry = entry_for(registry, device)
     if map_id is None:
         info = await read(caller, entry, "getMapInfo", {})
@@ -374,20 +411,12 @@ async def map_data(registry, caller, device, map_id=None, rooms_only=False):
     rooms = [project(a, ("id", "color", *ATTRS), names=("name",)) for a in _rows(data, "area_list") if a.get("type") == "room"]
     if rooms := [r for r in rooms if r]:
         out["rooms"] = rooms
-    if not rooms_only:
-        out.update(project(data, ("pix_len", "pix_lz4len", "resolution_unit"), ("is_update", "map_locked")))
-        if isinstance(data.get("resolution_unit"), str):
-            out.update(project(data, texts=("resolution_unit",)))
-        out["bitmap_decoded"] = False
-        out["note"] = "Map bitmap is not decoded. Raster encoding is not verified."
+    out.update(project(data, ("pix_len", "pix_lz4len", "resolution_unit"), ("is_update", "map_locked")))
+    if isinstance(data.get("resolution_unit"), str):
+        out.update(project(data, texts=("resolution_unit",)))
+    out["bitmap_decoded"] = False
+    out["note"] = "Map bitmap is not decoded. Raster encoding is not verified."
     return out
-
-
-async def task(registry, caller, device, map_id, room_ids):
-    # UNVERIFIED: mode 6 with runCleanTask has not been checked on hardware.
-    params = {"clean_on": True, "clean_mode": 6, "clean_order": True, "force_clean": False,
-              "start_type": 1, "map_id": integer(map_id, 0, 2**31 - 1, "map id"), "room_list": ids(room_ids, "rooms")}
-    return await write(registry, caller, device, "runCleanTask", params, note="UNVERIFIED: task mode 6 needs device verification.")
 
 
 async def schedules(registry, caller, device, start_index=0):
@@ -495,25 +524,19 @@ def tools(ctx):
         """Send the robot to its charging dock or cancel its return."""
         return await _invoke(ctx, device, write, "setSwitchCharge", {"switch_charge": boolean(returning, "returning")})
 
-    @ctx.tool(title="Vacuum suction", tier=Tier.SETTING)
-    async def vacuum_suction(device: DeviceRef, level: Annotated[int, Field(strict=True, ge=0, le=5, description="0 off, 1 quiet, 2 standard, 3 turbo, 4 max, 5 ultra")]) -> dict[str, Any]:
-        """Change global suction. Ultra is reset by the robot after the job."""
-        return await _invoke(ctx, device, attribute, "suction", level)
-
-    @ctx.tool(title="Mop water level", tier=Tier.SETTING)
-    async def vacuum_water_level(device: DeviceRef, level: Annotated[int, Field(strict=True, ge=0, le=3, description="0 off, 1 low, 2 medium, 3 high")]) -> dict[str, Any]:
-        """Change the global mop water level."""
-        return await _invoke(ctx, device, attribute, "cistern", level)
-
-    @ctx.tool(title="Cleaning passes", tier=Tier.SETTING)
-    async def vacuum_passes(device: DeviceRef, count: Annotated[int, Field(strict=True, ge=1, le=3, description="Number of passes, 1 to 3")]) -> dict[str, Any]:
-        """Change the global number of cleaning passes."""
-        return await _invoke(ctx, device, attribute, "clean_number", count)
-
-    @ctx.tool(title="Carpet boost", tier=Tier.SETTING)
-    async def vacuum_carpet_boost(device: DeviceRef, enabled: Annotated[bool, Field(strict=True, description="Boost suction on carpet")]) -> dict[str, Any]:
-        """Enable or disable carpet suction boost."""
-        return await _invoke(ctx, device, write, "setCarpetClean", {"carpet_clean_prefer": "boost" if boolean(enabled, "enabled") else "normal"})
+    @ctx.tool(title="Robot cleaning preferences", tier=Tier.SETTING)
+    async def vacuum_preferences(
+        device: DeviceRef,
+        suction: Annotated[int | None, Field(strict=True, ge=0, le=5, description="0 off, 1 quiet, 2 standard, 3 turbo, 4 max, 5 ultra (ultra resets after the job)")] = None,
+        water_level: Annotated[int | None, Field(strict=True, ge=0, le=3, description="Mop water: 0 off, 1 low, 2 medium, 3 high")] = None,
+        passes: Annotated[int | None, Field(strict=True, ge=1, le=3, description="Cleaning passes, 1 to 3")] = None,
+        cleaning_type: Annotated[int | None, Field(strict=True, ge=0, le=4, description="0 vacuum and mop, 1 mop, 2 vacuum, 3 vacuum then mop, 4 AI")] = None,
+        route_density: Annotated[int | None, Field(strict=True, ge=1, le=3, description="Route spacing: 1 daily, 2 fast, 3 meticulous")] = None,
+        carpet_boost: Annotated[bool | None, Field(strict=True, description="Boost suction on carpet")] = None,
+    ) -> dict[str, Any]:
+        """Change global cleaning preferences. Give only the ones to change; the rest stay as they are."""
+        values = {"suction": suction, "water_level": water_level, "passes": passes, "cleaning_type": cleaning_type, "route_density": route_density}
+        return await _invoke(ctx, device, preferences, values, carpet_boost)
 
     @ctx.tool(title="Empty robot dustbin", tier=Tier.SETTING)
     async def vacuum_empty_bin(device: DeviceRef) -> dict[str, Any]:
@@ -558,8 +581,9 @@ def tools(ctx):
 
     @ctx.tool(title="Stop robot job", tier=Tier.CONTROL)
     async def vacuum_stop(device: DeviceRef) -> dict[str, Any]:
-        """UNVERIFIED: try ending the job with clean_on=false. Needs a stop-button trace."""
-        # UNVERIFIED: the audit inferred this parameter from its name.
+        """End the current job. UNVERIFIED on a device: sends setSwitchClean with clean_on=false, as the app's stop does."""
+        # UNVERIFIED: the decompiled app's stop sends setSwitchClean with clean_on=false (or runCleanTask on some
+        # newer models, which tolpo does not send). Not checked on a robot.
         return await _invoke(ctx, device, write, "setSwitchClean", {"clean_on": False}, note="UNVERIFIED: clean_on=false as stop needs device verification.")
 
     @ctx.tool(title="Spot cleaning", tier=Tier.CONTROL)
@@ -568,7 +592,7 @@ def tools(ctx):
         return await _invoke(ctx, device, clean_start, 2)
 
     @ctx.tool(title="Clean selected rooms", tier=Tier.CONTROL)
-    async def vacuum_clean_rooms(device: DeviceRef, map_id: MapId, room_ids: Annotated[list[ProtocolId], Field(strict=True, min_length=1, max_length=32, description="Room ids from vacuum_rooms")]) -> dict[str, Any]:
+    async def vacuum_clean_rooms(device: DeviceRef, map_id: MapId, room_ids: Annotated[list[ProtocolId], Field(strict=True, min_length=1, max_length=32, description="Room ids from vacuum_map")]) -> dict[str, Any]:
         """Start cleaning selected rooms on an explicit map with global settings."""
         return await _invoke(ctx, device, clean_start, 3, map_id, room_ids)
 
@@ -582,41 +606,21 @@ def tools(ctx):
         """Start an existing custom preset on its map."""
         return await _invoke(ctx, device, clean_start, 5, map_id, preset_id=preset_id)
 
-    @ctx.tool(title="Run cleaning task", tier=Tier.CONTROL)
-    async def vacuum_task(device: DeviceRef, map_id: MapId, room_ids: Annotated[list[ProtocolId], Field(strict=True, min_length=1, max_length=32, description="Room ids on the explicit map")]) -> dict[str, Any]:
-        """UNVERIFIED: run a room task with runCleanTask and mode 6. Uses global cleaning settings."""
-        return await _invoke(ctx, device, task, map_id, room_ids)
-
     @ctx.tool(title="Start saved task group", tier=Tier.CONTROL)
     async def vacuum_task_group(device: DeviceRef, group_id: Annotated[int, Field(strict=True, ge=0, description="Existing saved task group id")]) -> dict[str, Any]:
         """Start a saved task group, the app's task-group cleaning mode 7."""
         integer(group_id, 0, 2**31 - 1, "group id")
         return await _invoke(ctx, device, write, "startCleanTaskGroup", {"group_id": group_id})
 
-    @ctx.tool(title="Cleaning type", tier=Tier.SETTING)
-    async def vacuum_cleaning_type(device: DeviceRef, cleaning_type: Annotated[int, Field(strict=True, ge=0, le=4, description="0 vacuum and mop, 1 mop, 2 vacuum, 3 vacuum then mop, 4 AI")]) -> dict[str, Any]:
-        """Change the global cleaning type."""
-        return await _invoke(ctx, device, attribute, "clean_type", cleaning_type)
-
-    @ctx.tool(title="Cleaning route density", tier=Tier.SETTING)
-    async def vacuum_route_density(device: DeviceRef, density: Annotated[int, Field(strict=True, ge=1, le=3, description="1 daily, 2 fast, 3 meticulous")]) -> dict[str, Any]:
-        """Change the global route spacing."""
-        return await _invoke(ctx, device, attribute, "density", density)
-
     @ctx.tool(title="Robot map list")
     async def vacuum_maps(device: DeviceRef) -> dict[str, Any]:
         """Read saved map metadata and the current map id. Names are decoded and flattened."""
         return await _invoke(ctx, device, maps)
 
-    @ctx.tool(title="Current robot map metadata")
-    async def vacuum_current_map(device: DeviceRef) -> dict[str, Any]:
-        """Read the current map's metadata and room names. The bitmap is not decoded or returned."""
-        return await _invoke(ctx, device, map_data)
-
-    @ctx.tool(title="Robot rooms")
-    async def vacuum_rooms(device: DeviceRef, map_id: Annotated[int | None, Field(strict=True, ge=0, description="Map id, or omit for current map")] = None) -> dict[str, Any]:
-        """Read room ids, names and cleaning preferences on a map."""
-        return await _invoke(ctx, device, map_data, map_id, rooms_only=True)
+    @ctx.tool(title="Robot map and rooms")
+    async def vacuum_map(device: DeviceRef, map_id: Annotated[int | None, Field(strict=True, ge=0, le=2**31 - 1, description="Map id from vacuum_maps, or omit for the current map")] = None) -> dict[str, Any]:
+        """Read one map's metadata and its room ids, names and preferences. The bitmap is not decoded or returned."""
+        return await _invoke(ctx, device, map_data, map_id)
 
     @ctx.tool(title="Robot schedules")
     async def vacuum_schedules(device: DeviceRef, start_index: Annotated[int, Field(strict=True, ge=0, description="Device pagination start index")] = 0) -> dict[str, Any]:

@@ -74,11 +74,13 @@ WRITES = [
     ("vacuum_pause", {"paused": False}, "setRobotPause", {"pause": False}, 1),
     ("vacuum_return_home", {}, "setSwitchCharge", {"switch_charge": True}, 1),
     ("vacuum_return_home", {"returning": False}, "setSwitchCharge", {"switch_charge": False}, 1),
-    ("vacuum_suction", {"level": 5}, "setCleanAttr", {"type": "global", "suction": 5}, 2),
-    ("vacuum_water_level", {"level": 3}, "setCleanAttr", {"type": "global", "cistern": 3}, 2),
-    ("vacuum_passes", {"count": 2}, "setCleanAttr", {"type": "global", "clean_number": 2}, 2),
-    ("vacuum_carpet_boost", {"enabled": True}, "setCarpetClean", {"carpet_clean_prefer": "boost"}, 2),
-    ("vacuum_carpet_boost", {"enabled": False}, "setCarpetClean", {"carpet_clean_prefer": "normal"}, 2),
+    ("vacuum_preferences", {"suction": 5}, "setCleanAttr", {"type": "global", "suction": 5}, 2),
+    ("vacuum_preferences", {"water_level": 3}, "setCleanAttr", {"type": "global", "cistern": 3}, 2),
+    ("vacuum_preferences", {"passes": 2}, "setCleanAttr", {"type": "global", "clean_number": 2}, 2),
+    ("vacuum_preferences", {"cleaning_type": 0}, "setCleanAttr", {"type": "global", "clean_type": 0}, 2),
+    ("vacuum_preferences", {"route_density": 3}, "setCleanAttr", {"type": "global", "density": 3}, 2),
+    ("vacuum_preferences", {"carpet_boost": True}, "setCarpetClean", {"carpet_clean_prefer": "boost"}, 2),
+    ("vacuum_preferences", {"carpet_boost": False}, "setCarpetClean", {"carpet_clean_prefer": "normal"}, 2),
     ("vacuum_empty_bin", {}, "setSwitchDustCollection", {"switch_dust_collection": True}, 2),
     ("vacuum_auto_empty", {"enabled": True, "mode": 3}, "setDustCollectionInfo", {"auto_dust_collection": True, "dust_collection_mode": 3}, 2),
     ("vacuum_volume", {"volume": 20}, "setVolume", {"volume": 20}, 2),
@@ -90,10 +92,7 @@ WRITES = [
     ("vacuum_clean_rooms", {"map_id": 7, "room_ids": [1, 2]}, "setSwitchClean", {**START, "clean_mode": 3, "map_id": 7, "room_list": [1, 2], "start_type": 1}, 1),
     ("vacuum_zones", {"map_id": 7, "zones": [v.Zone(**ZONE)]}, "setSwitchClean", {**START, "clean_mode": 4, "map_id": 7, "start_type": 1, "area_list": [ZONE_WIRE]}, 1),
     ("vacuum_preset", {"map_id": 7, "preset_id": 12}, "setSwitchClean", {**START, "clean_mode": 5, "map_id": 7, "start_type": 1, "custom_rule_id": 12}, 1),
-    ("vacuum_task", {"map_id": 7, "room_ids": [1]}, "runCleanTask", {**START, "clean_mode": 6, "map_id": 7, "room_list": [1], "start_type": 1}, 1),
     ("vacuum_task_group", {"group_id": 5}, "startCleanTaskGroup", {"group_id": 5}, 1),
-    ("vacuum_cleaning_type", {"cleaning_type": 0}, "setCleanAttr", {"type": "global", "clean_type": 0}, 2),
-    ("vacuum_route_density", {"density": 3}, "setCleanAttr", {"type": "global", "density": 3}, 2),
     ("vacuum_set_schedule", {"week_day": 3, "minute": 480, "map_id": 7, "room_ids": [1]}, "addScheduleRule", SCHEDULE, 2),
     ("vacuum_set_schedule", {"week_day": 3, "minute": 480, "map_id": 7, "room_ids": [1], "rule_id": "s1"}, "editScheduleRule", {**SCHEDULE, "id": "s1"}, 2),
     ("vacuum_remove_schedule", {"rule_id": "s1"}, "removeScheduleRules", {"remove_all": False, "rule_list": [{"id": "s1"}]}, 2),
@@ -106,8 +105,8 @@ READ_TOOLS = [
     ("vacuum_consumables", {}, ["getConsumablesInfo"]),
     ("vacuum_records", {}, ["getCleanRecords"]),
     ("vacuum_maps", {}, ["getMapInfo"]),
-    ("vacuum_current_map", {}, ["getMapInfo", "getMapData"]),
-    ("vacuum_rooms", {"map_id": 7}, ["getMapData"]),
+    ("vacuum_map", {}, ["getMapInfo", "getMapData"]),
+    ("vacuum_map", {"map_id": 7}, ["getMapData"]),
     ("vacuum_schedules", {"start_index": 3}, ["getScheduleRules"]),
     ("vacuum_do_not_disturb", {}, ["getDoNotDisturb"]),
 ]
@@ -133,7 +132,7 @@ async def test_every_write_wire_refresh_compact(house, name, args, method, expec
     assert result["id"] == "floor-robot" and result["changed"] == expected
     assert "HIDDEN" not in json.dumps(result)
     assert robot.updates == 1
-    if name in ("vacuum_stop", "vacuum_task", "vacuum_set_schedule"):
+    if name in ("vacuum_stop", "vacuum_set_schedule"):
         assert "UNVERIFIED" in result["note"]
 
 
@@ -361,12 +360,36 @@ async def test_invalid_wire_results_do_not_claim_success(house, result):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("key,value", [("suction", -1), ("suction", 6), ("cistern", 4), ("clean_number", 0), ("clean_number", 4), ("clean_type", 5), ("density", 0), ("density", 4), ("suction", True), ("suction", 1.5), ("token", 1)])
-async def test_attributes_validate_before_wire(house, key, value):
+@pytest.mark.parametrize("key,value", [("suction", -1), ("suction", 6), ("water_level", 4), ("passes", 0), ("passes", 4), ("cleaning_type", 5), ("route_density", 0), ("route_density", 4), ("suction", True), ("suction", 1.5), ("token", 1)])
+async def test_preferences_validate_before_wire(house, key, value):
     reg, caller, _ = house()
     with pytest.raises(BadRequest):
-        await v.attribute(reg, caller, "floor-robot", key, value)
+        await v.preferences(reg, caller, "floor-robot", {"passes": 2, key: value})
+    with pytest.raises(BadRequest):
+        await v.preferences(reg, caller, "floor-robot", {"passes": 2}, carpet_boost=1)
+    with pytest.raises(BadRequest):
+        await v.preferences(reg, caller, "floor-robot", {"suction": None})
     assert caller.sent == []
+
+
+@pytest.mark.anyio
+async def test_preferences_send_one_request_each_and_refresh_once(house):
+    reg, caller, robot = house()
+    out = await v.preferences(reg, caller, "floor-robot", {"suction": 3, "water_level": 1, "passes": None}, carpet_boost=True)
+    assert caller.sent == [("floor-robot", "setCleanAttr", {"type": "global", "suction": 3}),
+                           ("floor-robot", "setCleanAttr", {"type": "global", "cistern": 1}),
+                           ("floor-robot", "setCarpetClean", {"carpet_clean_prefer": "boost"})]
+    assert out["changed"] == {"type": "global", "suction": 3, "cistern": 1, "carpet_clean_prefer": "boost"}
+    assert robot.updates == 1
+
+
+@pytest.mark.anyio
+async def test_preferences_partial_failure_says_what_already_changed(house):
+    reg, caller, robot = house(responses={"setCarpetClean": DeviceError("RAW", error_code=None)})
+    with pytest.raises(DeviceUnavailable) as caught:
+        await v.preferences(reg, caller, "floor-robot", {"suction": 3}, carpet_boost=True)
+    assert "setCarpetClean failed" in str(caught.value) and "Already changed before the failure: suction" in str(caught.value)
+    assert "RAW" not in str(caught.value) and robot.updates == 1
 
 
 @pytest.mark.anyio
@@ -375,7 +398,7 @@ async def test_invalid_targets_settings_schedules_before_wire(house):
     cases = [
         (v.clean_start, (3, 7, [])), (v.clean_start, (3, 7, [True])), (v.clean_start, (3, 7, [1, 1])),
         (v.clean_start, (3, None, [1])), (v.clean_start, (5, 7, None, None, -1)),
-        (v.task, (-1, [1])), (v.task, (7, [1] * 33)),
+        (v.clean_start, (3, 7, [1] * 33)), (v.clean_start, (3, -1, [1])),
         (v.auto_empty, (True, 4)), (v.auto_empty, (1, 0)),
         (v.reset_consumable, ("password", "resetConsumablesTime floor-robot")),
         (v.records, (33,)), (v.map_data, (-1,)), (v.schedules, (-1,)),
@@ -437,7 +460,7 @@ async def test_mcp_schema_roundtrip_and_errors(house, mcp):
         denied = await client.call_tool("vacuum_locate", {"device": "floor-robot"})
         assert denied.is_error and "playSelectAudio floor-robot" in denied.content[0].text
         caller.sent.clear()
-        for name, args in (("vacuum_suction", {"level": True}), ("vacuum_suction", {"level": "2"}), ("vacuum_suction", {"level": 6}), ("vacuum_volume", {"volume": -1}), ("vacuum_clean_rooms", {"map_id": 7, "room_ids": [True]}), ("vacuum_zones", {"map_id": 7, "zones": [{**ZONE, "token": "hidden"}]})):
+        for name, args in (("vacuum_preferences", {"suction": True}), ("vacuum_preferences", {"suction": "2"}), ("vacuum_preferences", {"suction": 6}), ("vacuum_preferences", {}), ("vacuum_volume", {"volume": -1}), ("vacuum_clean_rooms", {"map_id": 7, "room_ids": [True]}), ("vacuum_zones", {"map_id": 7, "zones": [{**ZONE, "token": "hidden"}]})):
             result = await client.call_tool(name, {"device": "floor-robot", **args})
             assert result.is_error
         assert caller.sent == []
