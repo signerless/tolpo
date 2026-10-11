@@ -124,6 +124,7 @@ WINDOW_SIZE = 50  # parts the camera may send before it waits for an acknowledge
 ACK_EVERY = 25  # the app acknowledges every 25th part number
 MAX_IMAGE = 2 * 1024 * 1024  # a thumbnail or event picture; the app's own buffer for one is 500 KB
 STOP_TIMEOUT = 1.0
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 IMAGE_TYPES = {"image/jpeg": "jpeg", "image/avc": "h264", "image/hevc": "hevc"}
 
 PSK_MESSAGE = (
@@ -170,7 +171,7 @@ class Part:
     @property
     def seq(self) -> int | None:
         value = self.headers.get("x-data-sequence", "")
-        return int(value) if value.isdigit() else None
+        return int(value) if re.fullmatch(r"[0-9]{1,10}", value) else None  # ASCII digits only: "\xb2".isdigit() is True
 
     @property
     def session(self) -> str | None:
@@ -434,8 +435,9 @@ class MediaSession:
                 code = _code(params.get("error_code", message.get("error_code", 0)))
                 if code:
                     raise GrabError("rejected", f"the camera refused the request (error {code})")
-                if params.get("session_id") is not None:
-                    self.session_id = str(params["session_id"])
+                session = params.get("session_id")
+                if session is not None and SESSION_ID.fullmatch(str(session)):
+                    self.session_id = str(session)  # it goes back into our own headers, so only a plain token is kept
                 yield Notice("response", params)
             elif kind == "notification":
                 event = str(params.get("event_type", ""))

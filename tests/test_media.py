@@ -576,3 +576,24 @@ async def test_an_event_picture_download_is_acknowledged_like_a_recording():
     async with FakeCamera(PASSWORD, [], script=windowed(chunks, mime="image/jpeg")) as camera:
         fmt, data = await media.fetch_image("127.0.0.1", PASSWORD, {"download": {"media_type": 2, "file_id": "f1"}}, port=camera.port)
     assert (fmt, data) == ("jpeg", jpeg) and camera.acked >= 25
+
+
+# ---- what the camera writes in its headers and answers is untrusted --------------------------------------------
+
+
+def test_only_plain_ascii_digits_count_as_a_part_number():
+    part = lambda value: media.Part("video/mp2t", {"x-data-sequence": value}, b"")
+    assert part("25").seq == 25
+    for odd in ("\xb2", "٢٥", "-1", "2 5", "", "9" * 11):  # superscript two and Arabic digits pass isdigit()
+        assert part(odd).seq is None
+
+
+@pytest.mark.anyio
+async def test_a_session_id_that_is_not_a_plain_token_never_reaches_our_headers():
+    jpeg = fakes.TINY_JPEG
+    async with FakeCamera(PASSWORD, [], script=cover_script([("image/jpeg", jpeg, "x")], session="42\r\nX-Injected: 1")) as camera:
+        fmt, data = await media.fetch_image("127.0.0.1", PASSWORD, {"download": {"media_type": 2, "file_id": "a"}}, port=camera.port)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert (fmt, data) == ("jpeg", jpeg)
+    assert not any("x-injected" in headers for headers, _ in camera.received)
+    assert camera.stops() == []  # without a session id it can trust, the client only hangs up
