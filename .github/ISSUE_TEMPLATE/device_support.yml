@@ -1,0 +1,28 @@
+name: Device support
+description: A Tapo device is not found, or cannot be connected
+labels: [device-support]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `.venv/bin/agentic-home scan` first. A device that answers discovery but cannot connect is listed
+        there with a reason. Remove credentials, MAC addresses and IP addresses before pasting.
+  - type: input
+    id: model
+    attributes:
+      label: Device model and firmware
+      placeholder: C465, firmware 1.2.3
+    validations:
+      required: true
+  - type: textarea
+    id: scan
+    attributes:
+      label: Output of `agentic-home scan`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else
+      description: Is the device battery powered? Does it work in the Tapo app? Is it on another subnet or VLAN?

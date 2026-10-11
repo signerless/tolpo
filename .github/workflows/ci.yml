@@ -17,8 +17,11 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
       - name: Create a virtual environment on Python ${{ matrix.python-version }}
         run: uv venv --python ${{ matrix.python-version }} .venv
       - name: Install the project

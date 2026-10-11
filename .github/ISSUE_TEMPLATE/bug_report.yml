@@ -1,0 +1,46 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please remove credentials, MAC addresses, device names and IP addresses
+        from anything you paste. For a security problem, do not use this form: see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: devices
+    attributes:
+      label: Device models involved
+      description: For example L430C, P115, H200, C225.
+      placeholder: H200 hub with T110 sensors
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: How are you using it?
+      options:
+        - MCP server
+        - HTTP API
+        - agentic-home scan
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `.venv/bin/python --version` and `uv pip list | grep -i -E "kasa|agentic"`.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: The lines from the server's stderr around the problem, with private details removed.
+      render: text
