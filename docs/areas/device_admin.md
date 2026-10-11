@@ -55,7 +55,8 @@ groups. A rename keeps the current session's device slug; a new discovery sessio
 new slug after a device alias change. Reassign stale room members explicitly.
 
 The version 1 JSON file has `rooms` and `groups` objects mapping names to slug lists. Writes use
-an exclusive file lock and atomic replacement with mode 0600 on Unix systems. Invalid or unreadable
+an exclusive file lock and atomic replacement with mode 0600 on Unix systems. Windows has no such
+lock, so there the replacement stays atomic but two tolpo processes writing at once can lose a change. Invalid or unreadable
 files are refused and never silently replaced. Each collection and member list is limited to 256.
 `resolve_room(name) -> list[str]` is a plain function other areas can import without shared edits.
 Room power checks all members before writing and refuses cameras, doorbells, hubs and sensors.

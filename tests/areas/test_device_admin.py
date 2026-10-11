@@ -384,6 +384,20 @@ async def test_local_validation_duplicates_missing_and_no_partial_assignment(hou
         assert state.read_text() == original
 
 
+async def test_rooms_save_without_posix_locks(house, state, monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_fcntl(name, *args, **kwargs):
+        if name == "fcntl":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", no_fcntl)
+    reg, caller, _ = house()
+    admin.local_collection(reg, "rooms", "create", "A")
+    assert json.loads(state.read_text())["rooms"] == {"A": []}
+
+
 async def test_non_ascii_names_round_trip_in_utf8(house, state, monkeypatch):
     reg, caller, _ = house()
     admin.local_collection(reg, "rooms", "create", "Küche")

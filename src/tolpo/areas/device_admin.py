@@ -410,13 +410,17 @@ def resolve_room(name: str) -> list[str]:
 @contextmanager
 def _locked_map():
     # flock coordinates separate tolpo processes; os.replace makes readers see a complete file.
-    import fcntl
+    try:
+        import fcntl
+    except ImportError:  # Windows has no flock. The replace stays atomic, only the lock is skipped.
+        fcntl = None
 
     path = _state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with os.fdopen(os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600), "r+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(lock, fcntl.LOCK_EX)
             data = _load_map(path)
             yield data
             if any(len(data[k]) > 256 for k in ("rooms", "groups")):
