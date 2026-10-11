@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import kasa
 from kasa import Device, DeviceType, Feature, Module
@@ -22,6 +22,8 @@ from kasa.exceptions import AuthenticationError, KasaException
 
 from . import compat, policy
 from .config import Config, local_subnets
+from .media import live_chunks
+from .snapshot import QUALITIES, GrabError, Picture, grab, rtsp_url
 
 log = logging.getLogger(__name__)
 
@@ -30,10 +32,12 @@ SWEEP_MAX_HOSTS = 1024  # do not unicast-sweep anything larger than a /22
 BOOT_GRACE = 15.0  # at startup, stop waiting for slow devices after this long and let them finish in the background
 RETRY_DELAYS = (5.0, 15.0, 45.0)  # seconds between retries of hosts we know but could not reach
 CACHE_MAX_AGE = 30 * 24 * 3600  # forget a remembered host only after this long without seeing it
+LOGIN_COOLDOWN = 300.0  # after a camera rejects the login, leave it alone this long: repeated failures can lock it out
 
 
 class RegistryError(Exception):
     status_code = 400
+    detail = ""  # for the owner at a terminal only; never put in an API or tool response
 
     def __init__(self, message: str, candidates: list[str] | None = None):
         super().__init__(message)
@@ -52,12 +56,22 @@ class Forbidden(RegistryError):
     status_code = 403
 
 
+class NotEnabled(Forbidden):
+    """The owner has not allowed pictures from this camera."""
+
+
 class BadRequest(RegistryError):
     status_code = 400
 
 
 class DeviceUnavailable(RegistryError):
     status_code = 502
+
+
+class Unsupported(RegistryError):
+    """tolpo cannot do this on this machine, for example because ffmpeg is missing."""
+
+    status_code = 501
 
 
 _KIND = {
@@ -96,6 +110,7 @@ class Entry:
     slug: str
     root: Entry | None = None  # the hub, for a hub child
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    picture_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # a camera serves one of our streams at a time
     last_update: float = 0.0
     online: bool = True
     error: str | None = None
@@ -127,6 +142,8 @@ class Registry:
         self._task: asyncio.Task | None = None
         self.ready = asyncio.Event()  # set once the first discovery has finished, successfully or not
         self._discovery_lock = asyncio.Lock()
+        self._grabs = asyncio.Semaphore(2)  # ffmpeg decodes video; do not run a pile of them at once
+        self._rejected: dict[str, float] = {}  # slug -> when the camera last refused our login for video
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -478,7 +495,13 @@ class Registry:
             caps.append("energy")
         if kind == "sensor":
             caps.append("sensor")
+        if self.pictures_enabled(entry):
+            caps.append("snapshot")
         return caps
+
+    def pictures_enabled(self, entry: Entry) -> bool:
+        """Whether the owner has enabled pictures for this camera, by listing its name."""
+        return entry.root is None and policy.can_snapshot(entry.kind, entry.device.alias, self.cfg.snapshots)
 
     def readings(self, entry: Entry) -> tuple[dict[str, Any], dict[str, str]]:
         values, units = {}, {}
@@ -591,6 +614,69 @@ class Registry:
         else:
             raise BadRequest(f"{feature_id} cannot be set directly")
         await self._run(entry, lambda: feat.set_value(value))
+
+    async def _check_picture(self, entry: Entry, quality: str) -> None:
+        """Everything that must hold before any video is opened. Raises an error an agent may read."""
+        if quality not in QUALITIES:
+            raise BadRequest(f"quality must be one of {', '.join(QUALITIES)}")
+        if entry.kind not in policy.SNAPSHOT_KINDS:
+            raise BadRequest(f"{entry.slug} is a {entry.kind}, not a camera")
+        if not policy.can_snapshot(entry.kind, entry.device.alias, self.cfg.snapshots):
+            raise NotEnabled(f"pictures cannot be taken with {entry.slug}: the owner's policy blocks it")
+        if entry.root is not None:
+            raise BadRequest(f"{entry.slug} is reached through the hub and has no video stream of its own")
+        if (waited := time.monotonic() - self._rejected.get(entry.slug, float("-inf"))) < LOGIN_COOLDOWN:
+            raise DeviceUnavailable(
+                f"{entry.slug} refused the login for video a moment ago; not trying again for {LOGIN_COOLDOWN - waited:.0f} seconds"
+            )
+
+        # The privacy switch is read fresh. If the camera cannot be asked, assume nothing about the lens.
+        await self.refresh(entry, force=True)
+        if not entry.online:
+            raise DeviceUnavailable(f"{entry.slug} is not reachable right now")
+        state = entry.device.features.get("state")
+        if state is not None and self.feature_value(state) is False:
+            raise Forbidden(f"{entry.slug} has its privacy mode on, so its lens is covered")
+
+    def _stream(self, entry: Entry, quality: str) -> tuple[str | None, AsyncIterator[bytes] | None, str]:
+        """Where the video comes from: an RTSP address with a camera account, or the app's channel without one,
+        which needs only the Tapo account tolpo already has. The third value is the secret to scrub from output."""
+        if self.cfg.camera_username and self.cfg.camera_password:
+            url = rtsp_url(entry.device.host, self.cfg.camera_username, self.cfg.camera_password, quality)
+            return url, None, self.cfg.camera_password
+        return None, live_chunks(entry.device.host, self.cfg.password, quality), self.cfg.password
+
+    def _failure(self, entry: Entry, exc: GrabError) -> RegistryError:
+        log.warning("no picture from %s: %s", entry.slug, exc.reason)
+        if exc.reason == "auth":
+            self._rejected[entry.slug] = time.monotonic()
+        failure = (Unsupported if exc.reason == "missing" else DeviceUnavailable)(f"no picture from {entry.slug}: {exc}")
+        failure.detail = exc.detail
+        return failure
+
+    async def snapshot(self, entry: Entry, quality: str = "low") -> Picture:
+        """One still picture from a camera the owner has enabled. Every error message is fit for an agent to read."""
+        await self._check_picture(entry, quality)
+        url, feed, secret = self._stream(entry, quality)
+        async with entry.picture_lock, self._grabs:
+            started = time.monotonic()
+            try:
+                picture = await grab(url, feed=feed, ffmpeg=self.cfg.ffmpeg or "ffmpeg", secrets=(secret,))
+            except GrabError as exc:
+                raise self._failure(entry, exc) from None
+        log.info(
+            "picture from %s (%s, %s): %dx%d, %d KB, %.1f s",
+            entry.slug, quality, "app channel" if feed is not None else "rtsp",
+            picture.width, picture.height, len(picture.data) // 1024, time.monotonic() - started,
+        )
+        return picture
+
+    async def live_view(self, entry: Entry, quality: str = "low") -> tuple[str | None, AsyncIterator[bytes] | None, str]:
+        """The same checks as a picture, then the stream itself for a player on the owner's own screen:
+        an RTSP address, or the app's channel as MPEG-TS chunks. Returns (url, feed, secret to scrub)."""
+        await self._check_picture(entry, quality)
+        log.info("live view of %s (%s)", entry.slug, quality)
+        return self._stream(entry, quality)
 
     def health(self) -> dict[str, Any]:
         tops = [e for e in self._entries.values() if e.root is None]

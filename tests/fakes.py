@@ -1,5 +1,9 @@
 """Stand-ins for python-kasa devices so the API can be tested without hardware."""
 
+import json
+import sys
+from pathlib import Path
+
 from kasa import DeviceType, Feature, Module
 
 T, C = Feature.Type, Feature.Category
@@ -137,3 +141,88 @@ def populate(registry, extra=()):
     for device in [*devices.values(), *extra]:
         registry._adopt(device)
     return devices
+
+
+# A real 16x16 grey JPEG made by ffmpeg, so the picture checks run on genuine bytes.
+TINY_JPEG = bytes.fromhex(
+    "ffd8ffe000104a46494600010200000100010000fffe00104c61766336322e32382e31303200ffdb004300080a0a0b0a0b0d0d0d0d0d0d"
+    "100f101010101010101010101012121215151512121210101212141415151717171515151517171919191e1e1c1c2323242b2b33ffc400"
+    "4a000100000000000000000000000000000000010100000000000000000000000000000000100100000000000000000000000000000000"
+    "110100000000000000000000000000000000ffc00011080010001003012200021100031100ffda000c03010002110311003f00000fffd9"
+)
+
+# A stand-in for ffmpeg. Tests choose what it does through FAKE_FFMPEG_MODE and read what it was asked
+# through FAKE_FFMPEG_LOG, so no camera and no video library is involved.
+_FAKE_FFMPEG = """\
+#!{python}
+import json, os, sys, time
+
+mode = os.environ.get("FAKE_FFMPEG_MODE", "ok")
+if os.environ.get("FAKE_FFMPEG_LOG"):
+    with open(os.environ["FAKE_FFMPEG_LOG"], "a") as log:
+        log.write(json.dumps(sys.argv[1:]) + "\\n")
+if os.environ.get("FAKE_FFMPEG_PID"):
+    with open(os.environ["FAKE_FFMPEG_PID"], "w") as pid:
+        pid.write(str(os.getpid()))
+
+url = sys.argv[sys.argv.index("-i") + 1]
+if url == "pipe:0" and not sys.stdin.buffer.read(188):
+    # Like the real ffmpeg: nothing to show until the first video arrives, and an error when none does.
+    print("pipe:0: Invalid data found when processing input", file=sys.stderr)
+    sys.exit(1)
+JPEG = bytes.fromhex({jpeg!r})
+FAILURES = {{
+    "unauthorized": "[rtsp @ 0x1] method DESCRIBE failed: 401 Unauthorized",
+    "notfound": "[rtsp @ 0x1] method DESCRIBE failed: 404 Not Found",
+    "busy": "[rtsp @ 0x1] method DESCRIBE failed: 453 Not Enough Bandwidth",
+    "refused": "[tcp @ 0x1] Connection to tcp://192.0.2.10:554?timeout=0 failed: Connection refused",
+    "timeout": "[tcp @ 0x1] Connection to tcp://192.0.2.10:554?timeout=0 failed: Connection timed out",
+    "crash": "Segmentation fault",
+}}
+if mode == "ok":
+    sys.stdout.buffer.write(JPEG)
+elif mode == "garbage":
+    sys.stdout.buffer.write(b"this is not a picture")
+elif mode == "empty":
+    pass
+elif mode == "hang":
+    time.sleep(60)
+elif mode == "slow":
+    with open(os.environ["FAKE_FFMPEG_TRACE"], "a") as trace:
+        trace.write("start %f\\n" % time.time())
+    time.sleep(0.4)
+    sys.stdout.buffer.write(JPEG)
+    with open(os.environ["FAKE_FFMPEG_TRACE"], "a") as trace:
+        trace.write("end %f\\n" % time.time())
+else:
+    # Real ffmpeg repeats the whole URL, password included, when it fails.
+    print(FAILURES[mode] + "\\nError opening input file " + url + ".", file=sys.stderr)
+    sys.exit(1)
+"""
+
+
+def fake_ffmpeg(folder: Path) -> str:
+    """Write the stand-in into `folder` and return its path."""
+    script = folder / "ffmpeg"
+    script.write_text(_FAKE_FFMPEG.format(python=sys.executable, jpeg=TINY_JPEG.hex()))
+    script.chmod(0o755)
+    return str(script)
+
+
+class FakeFfmpeg:
+    """The stand-in above, wired to a test: `mode()` chooses what it does and `calls()` lists what it was asked."""
+
+    def __init__(self, folder: Path, monkeypatch):
+        self.path = fake_ffmpeg(folder)
+        self.folder, self._patch = folder, monkeypatch
+        self._log = folder / "calls.jsonl"
+        monkeypatch.setenv("FAKE_FFMPEG_LOG", str(self._log))
+
+    def mode(self, name: str) -> None:
+        self._patch.setenv("FAKE_FFMPEG_MODE", name)
+
+    def calls(self) -> list[list[str]]:
+        return [json.loads(line) for line in self._log.read_text().splitlines()] if self._log.exists() else []
+
+    def urls(self) -> list[str]:
+        return [call[call.index("-i") + 1] for call in self.calls()]

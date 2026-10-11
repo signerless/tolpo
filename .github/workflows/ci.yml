@@ -27,6 +27,11 @@ jobs:
         run: uv venv --python ${{ matrix.python-version }} .venv
       - name: Install the project
         run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Install ffmpeg, which the camera picture tests use
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
       - name: Run the tests
         run: .venv/bin/python -m pytest -q
 

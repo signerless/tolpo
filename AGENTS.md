@@ -31,16 +31,22 @@ All of them must pass before you commit. CI runs the same checks on Python 3.11,
 | `src/tolpo/policy.py` | What may be read and written. Deny by default |
 | `src/tolpo/views.py` | What a device looks like, shared by the HTTP API and the MCP server |
 | `src/tolpo/mcp_server.py`, `src/tolpo/api.py` | The two interfaces |
+| `src/tolpo/snapshot.py` | One picture from a camera: runs ffmpeg and checks what comes back |
+| `src/tolpo/media.py` | Client for the video channel of the Tapo app (port 8800) |
 | `src/tolpo/compat.py` | Fixes for devices python-kasa cannot reach yet |
 | `bin/tolpo.js` | Node launcher: runs the bundled Python with `uvx` and passes stdio through |
-| `tests/` | Python tests. `tests/fakes.py` has the simulated devices |
+| `tests/` | Python tests. `tests/fakes.py` has the simulated devices and a fake ffmpeg, `tests/fake_camera.py` a fake camera video port |
 | `test/` | Node tests for the launcher |
 | `docs/protocols.md` | Notes on how Tapo devices talk on the LAN, in our own words |
 
 ## Rules
 
-- Tests must never contact real devices. Use the fakes in `tests/fakes.py`. Do not run the server or a scan with
+- Tests must never contact real devices or cameras. Use the fakes in `tests/fakes.py` and `tests/fake_camera.py`. Do not run the server or a scan with
   wrong or fake credentials on a real network: failed logins on real devices are best avoided.
+- A picture leaves the house, so it stays opt-in per camera (`cameras.snapshots`). Never log or return the camera
+  account, the Tapo password or an RTSP address, and never forward ffmpeg's raw output to an agent.
+- The video client signs in once per attempt and never retries a rejected login. Use only the owner's own account:
+  no default, built-in or derived credentials, and no unencrypted session.
 - Keep writes deny by default. A feature becomes writable only by being added to `src/tolpo/policy.py`, with a test
   that shows what it allows and what it still refuses. Never return the Wi-Fi name or Matter setup codes.
 - Anything an agent receives from a device, such as a name, is data typed by someone else. Keep flattening and
@@ -62,6 +68,8 @@ All of them must pass before you commit. CI runs the same checks on Python 3.11,
   `tests/test_release_metadata.py` enforces it.
 - `package.json` lists `src/tolpo/*.py` on purpose. A root `.npmignore` does not override `files`, so a whole
   directory would ship compiled caches.
+- ffmpeg needs `-probesize` and `-analyzeduration` turned down for the live feed of the app channel. The camera adds
+  a second track ffmpeg cannot name, and without those flags it waits for minutes. A test guards this.
 - Use `node --test` with no directory argument. `node --test test/` breaks on Node 22.
 - GitHub Actions in this repo are pinned to versions that exist. Check a tag before using it: some projects do not
   publish floating major tags.

@@ -12,7 +12,8 @@ could establish it. They exist so that other people can write interoperable soft
   we own, by reading their discovery responses and by watching which transport an open source client
   negotiates with them.
 - **Existing open source work.** The transports that `python-kasa` implements are documented in its
-  repository. We link to it rather than repeat it.
+  repository. We link to it rather than repeat it. The video channel of the cameras is described by
+  [go2rtc](https://github.com/AlexxIT/go2rtc) and [pytapo](https://github.com/JurajNyiri/pytapo), both MIT licensed.
 
 What is deliberately not here: any code or assets from the app, any key, seed or default credential, and
 message-level details of the newer handshake. These notes describe the shape of the protocols, not a way
@@ -27,6 +28,8 @@ The app can reach a device in several ways. The names are the app's own labels f
 | Legacy HTTP (secure pass-through) | JSON over HTTP with an RSA-wrapped session; `python-kasa` documents it for older firmware | Handled by `python-kasa` |
 | KLAP | Two-step handshake over HTTP that derives a per-session key from both sides' random seeds and a hash of the account credentials; requests are then encrypted and signed with a sequence number | Handled by `python-kasa` |
 | HTTPS with AES | JSON requests over TLS on port 443, after a login step; observed on hubs and cameras | Handled by `python-kasa` |
+| Media channel | Port 8800 on cameras. Digest login, then AES-encrypted MPEG-TS in multipart chunks. The app uses it for live view, see "Camera video" below | Used for pictures, see `media.py` |
+| RTSP and ONVIF | The standard camera interfaces, on ports 554 and 2020, available after a camera account exists | Used for pictures when a camera account is configured |
 | TPAP | A newer protocol built on a password-authenticated key exchange, see below | Not implemented. `python-kasa` 0.11 has no TPAP transport, and we know of no other open source client that does |
 | BLE and TPAP over BLE | Bluetooth Low Energy, which the app uses among other things to onboard devices | Not used by tolpo |
 | BCCP | A transport tied to some light strips and to music-synchronised lighting | Not analysed |
@@ -67,6 +70,34 @@ What we established about its shape:
 What we did not establish, and why it matters: none of the devices we own use TPAP today, so there was
 nothing to test against. A client written from these notes alone would be guesswork. If you own a device that
 negotiates TPAP and want to help, say so in an issue.
+
+## Camera video
+
+Cameras give video in two ways.
+
+**RTSP.** After you create a camera account in the Tapo app, a camera serves its main stream at `/stream1` and a
+smaller one at `/stream2` on port 554, and ONVIF on port 2020. `python-kasa` builds the same address. The cameras we
+own listened on neither port before we made an account, so this route needs that extra setup.
+
+**The channel of the Tapo app.** All three cameras we own also listen on port 8800. A plain request there gets an
+HTTP Digest challenge, which is how the app starts live view. It needs only the Tapo account. As go2rtc and pytapo
+describe it, and as we checked on one of our own cameras:
+
+1. `POST /stream` gets a 401 with a Digest challenge. We saw MD5, `qop=auth` and an encrypt type of 3.
+2. The client answers as the user `admin`. The secret in the Digest is the Tapo account password as upper-case hex,
+   hashed with SHA-256 when the challenge says encrypt type 3 and with MD5 otherwise.
+3. The camera answers 200 with a `Key-Exchange` header holding a nonce. The media is AES encrypted with a key and an
+   IV derived from that nonce and the same hashed password.
+4. The client sends one JSON message asking for a live preview: channel, resolution, audio. The camera replies with
+   multipart parts. Those typed `video/mp2t` carry MPEG-TS with H.264 video and a private second track.
+
+The same boundary strings, headers and request fields appear in the streaming code of the app, which is how we
+cross-checked the public descriptions. The second track is a reason ffmpeg needs its probing turned down on a live
+pipe: it cannot identify the track and would wait for it.
+
+tolpo signs in once per attempt, never retries a rejected login, and refuses a session without encryption. It uses
+only the owner's own account. Playback of SD card recordings, clip downloads and two-way audio use related
+requests on the same port. They are not implemented.
 
 ## What the devices we tested use
 

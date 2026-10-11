@@ -1,6 +1,8 @@
-"""What an agent may read and write. Deny by default; widen with `allow_write` in the config."""
+"""What an agent may read and write. Deny by default; widen with `allow_write` and `snapshots` in the config."""
 
 from __future__ import annotations
+
+from typing import Iterable
 
 # Never returned by the API: Matter commissioning codes would let anyone add the hub
 # to another fabric, and the SSID leaks the home network name.
@@ -26,3 +28,17 @@ def can_write(kind: str, feature_id: str, extra: frozenset[str] = frozenset()) -
         # On cameras and doorbells `state` is the lens/privacy switch, not a power relay.
         return kind in POWER_KINDS
     return feature_id in DEFAULT_WRITABLE
+
+
+# A picture leaves the house: it goes to whatever model the agent runs on. So it is opt-in, camera by camera.
+SNAPSHOT_KINDS = frozenset({"camera", "doorbell"})
+
+
+def _plain(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def can_snapshot(kind: str, name: str | None, enabled: Iterable[str]) -> bool:
+    """`enabled` holds camera names as the owner typed them. Case and spacing do not matter; nothing else is guessed."""
+    wanted = _plain(name or "")
+    return kind in SNAPSHOT_KINDS and bool(wanted) and wanted in {_plain(n) for n in enabled}

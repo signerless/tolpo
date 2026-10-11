@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import secrets
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, JsonValue
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -23,6 +24,7 @@ Refer to a device by its short `id` (`office-1`), by its name as shown in the ap
 
 Reads are broad; writes are limited to power, brightness and color unless the owner
 widens `policy.allow_write`. Responses never include Matter setup codes or the Wi-Fi name.
+A still picture is available only from cameras the owner listed in `cameras.snapshots`.
 """
 
 
@@ -111,6 +113,27 @@ def create_app(
         entry = reg.resolve_one(ref)
         await reg.refresh(entry)
         return detail(reg, entry)
+
+    @app.get(
+        "/devices/{ref}/snapshot",
+        dependencies=auth,
+        response_class=Response,
+        responses={200: {"content": {"image/jpeg": {}}, "description": "One JPEG picture, taken now"}},
+        summary="One still picture from a camera",
+    )
+    async def snapshot(ref: str, quality: Literal["low", "high"] = "low"):
+        """Only cameras the owner enabled. `low` is the camera's small stream, `high` its main stream
+        (scaled to at most 1280 pixels wide). The picture is never stored or cached."""
+        picture = await reg.snapshot(reg.resolve_one(ref), quality)
+        return Response(
+            picture.data,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-store",
+                "Cross-Origin-Resource-Policy": "same-origin",  # another web page cannot embed it
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.post("/devices/{ref}/power", response_model=DeviceSummary, dependencies=auth, summary="Switch on or off")
     async def power(ref: str, body: PowerBody):

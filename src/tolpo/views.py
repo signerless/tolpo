@@ -40,7 +40,7 @@ class DeviceSummary(BaseModel):
     parent: str | None = Field(description="`id` of the hub this sensor is paired to")
     online: bool
     on: bool | None = Field(description="Power state for lights and plugs; null when not applicable")
-    capabilities: list[str] = Field(description="What an agent can do here: power, brightness, color_temp, color")
+    capabilities: list[str] = Field(description="What an agent can do here: power, brightness, color_temp, color, snapshot")
     settings: dict[str, JsonValue] = Field(description="Current light settings: brightness, color_temperature, hsv")
     readings: dict[str, JsonValue]
     units: dict[str, str]

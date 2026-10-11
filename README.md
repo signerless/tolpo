@@ -33,7 +33,9 @@ It ships two interfaces over the same core:
   doorbell, each with live state and a clear list of what can be changed.
 - **Safe by default.** Reads are broad; writes are limited to power, brightness and color unless you
   opt in. Cameras, pairing and hub alarms stay read-only. Wi-Fi names and Matter setup codes are
-  never returned.
+  never returned. An agent sees a camera only if you name it.
+- **Pictures from cameras.** A camera you enable gives an agent one still picture on request, through the same
+  video channel the Tapo app uses. No extra camera account is needed.
 - **Built for real homes.** Discovery combines broadcast with a direct per-address sweep, remembers
   devices between runs, retries the ones that are slow to wake, and reports honestly when something
   cannot be reached instead of pretending it is fine.
@@ -56,7 +58,7 @@ what python-kasa documents as supported but we have not tried.
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/climate.svg" width="36" alt="Temperature and humidity sensor"> | Temperature and humidity sensors | T310 | T315 (the one with a display) | Temperature, humidity, low-battery flag |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
-| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Read-only, no video |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Settings are read-only. A still picture, for the cameras you enable |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. Read-only |
 
 The C610 and the C465 are not on python-kasa's list yet, but both connected fine. The C465 needs the small
@@ -72,6 +74,7 @@ reports. Run `tolpo scan` to find out. If a device works or does not, tell us th
 - Python 3.11 or newer
 - One or more TP-Link Tapo devices on the same network, already set up in the Tapo app
 - Your Tapo account email and password
+- [ffmpeg](https://ffmpeg.org), only if you want pictures from cameras
 - [uv](https://docs.astral.sh/uv/) (or plain `pip`) to install
 
 ## Installation
@@ -116,7 +119,7 @@ macOS and Windows runs containers in a virtual machine that cannot see your devi
 install there.
 
 CI builds the image for both architectures and checks the MCP handshake inside it. Finding real devices from
-inside a container has not been tried yet.
+inside a container has not been tried yet. The image has no ffmpeg, so camera pictures do not work in it yet.
 
 ### From source
 
@@ -161,6 +164,14 @@ interval_seconds = 600
 # Features an agent may write beyond power, brightness and color.
 # Plain ids ("pan_left") or kind-qualified ones ("camera.state").
 allow_write = []
+
+[cameras]
+# Pictures are off for every camera until you name it here, as it is called in the Tapo app.
+snapshots = []                    # for example ["Hallway Cam"]
+# Optional. A camera account made in the Tapo app switches pictures to the standard RTSP stream.
+# username = "camera-account-name"
+# password = "camera-account-password"
+# ffmpeg = "/opt/homebrew/bin/ffmpeg"   # only if ffmpeg is not on your PATH
 ```
 
 Verify your setup with a read-only scan: `npx -y tolpo scan`, or `.venv/bin/tolpo scan` from a source checkout.
@@ -192,6 +203,7 @@ temperature upstairs?".
 | `home_overview` | The whole house at a glance: what is on, open doors and windows, water alerts, offline devices, low batteries, temperatures |
 | `list_devices` | Devices with state; filter by `kind` or name |
 | `get_device` | Every feature of one device, and which ones are writable |
+| `camera_snapshot` | One still picture from a camera you enabled |
 | `set_power` | Switch lights and plugs; accepts several targets and globs like `office*` |
 | `set_light` | Brightness, white temperature, or hue and saturation |
 | `set_feature` | Any other feature, only when the policy allows it |
@@ -215,6 +227,7 @@ curl -s localhost:8765/devices/front-door       # one device, every feature
 curl -s "localhost:8765/devices?kind=sensor"    # doors, windows, water, temperature
 
 # Write
+curl -s localhost:8765/devices/hallway-cam/snapshot -o picture.jpg    # a camera you enabled
 curl -s -X POST localhost:8765/devices/desk-lamp/power \
   -H 'content-type: application/json' -d '{"on": true}'
 curl -s -X POST localhost:8765/devices/office-1/light \
@@ -227,6 +240,44 @@ A device is addressed by its short `id` (`office-1`), by its name in the Tapo ap
 or, in the batch endpoints, by a glob such as `office*`. If a name matches several devices the server
 returns `409` with the candidates instead of guessing.
 
+## Camera pictures
+
+An agent can ask a camera for one still picture. Every camera is off until you name it in the config, with the
+name it has in the Tapo app:
+
+```toml
+[cameras]
+snapshots = ["Hallway Cam"]
+```
+
+You also need [ffmpeg](https://ffmpeg.org) on the machine that runs tolpo. Check the setup yourself before an
+agent uses it. This saves one picture to a file that only you can read:
+
+```bash
+npx -y tolpo snapshot "Hallway Cam" -o hallway.jpg
+```
+
+tolpo takes one frame from the camera's live stream with ffmpeg and returns it as a JPEG, at most 1280 pixels
+wide. `--quality high` asks for the main stream instead of the small one. There are two ways to reach the stream:
+
+- The video channel of the Tapo app, on port 8800 of the camera. It uses the Tapo account tolpo already has, so
+  there is nothing more to set up.
+- RTSP, if you create a camera account in the Tapo app and add it under `[cameras]` as `username` and `password`.
+  When a camera account is configured, tolpo uses RTSP.
+
+What to know before you turn it on:
+
+- A picture goes to the AI model your agent runs on. Enable only the cameras you are happy for it to see.
+- A camera in privacy mode gives no picture. An agent cannot switch privacy mode off unless you allow
+  `camera.state` in `allow_write`.
+- Every picture is logged with the camera and the time, never with the picture itself.
+- If a camera rejects the login, tolpo leaves it alone for five minutes, because repeated failures can lock a
+  camera out.
+- A picture is one frame from now, not a recording. Battery cameras can be asleep and may not answer.
+- With RTSP, ffmpeg receives the camera account on its command line, so other users on the same machine can see
+  it for a moment.
+- The doorbell sits behind the hub and has no stream of its own, so it gives no picture.
+
 ## Security model
 
 This server controls physical things, so it refuses by default and widens only on request.
@@ -236,6 +287,7 @@ This server controls physical things, so it refuses by default and widens only o
 | Read | Every feature of every device, except the Wi-Fi name and Matter setup codes, which are never returned |
 | Write by default | Power, brightness, color temperature, color and light presets, on lights and plugs |
 | Write on opt-in | Anything else, named in `policy.allow_write` (alarm test, pan/tilt, detection switches, reboot) |
+| Pictures | Only from the cameras named in `cameras.snapshots`. Off by default |
 | Never | `pair` and `unpair` on the hub |
 
 Cameras are read-only: the `state` switch on a camera is its privacy shutter, not a power relay, so it
@@ -294,7 +346,9 @@ src/tolpo/
   mcp_server.py  MCP server (stdio)
   config.py      config file and environment loading
   compat.py      small fixes for devices python-kasa cannot reach yet
-  cli.py         serve / mcp / scan entry points
+  snapshot.py    one picture from a camera, taken with ffmpeg
+  media.py       the video channel of the Tapo app (port 8800)
+  cli.py         serve / mcp / scan / snapshot entry points
 tests/           full suite against simulated devices
 docs/protocols.md  how Tapo devices talk on the local network
 assets/          logo, device icons and social preview
@@ -318,9 +372,9 @@ Version 0.1. Lights, plugs, hubs and sensors are fully supported over the KLAP a
 through `python-kasa`, plus a small patch (`compat.py`) for cameras with an ECDSA certificate, such as
 the C465, that `python-kasa` cannot reach on its own.
 
-Known limits: cameras and the doorbell are read-only, with no video; the MCP server runs over stdio,
-one process per client, with no shared HTTP transport yet; and devices on a second subnet have not
-been tested.
+Known limits: cameras give still pictures but no continuous video, and the doorbell gives none; the settings of
+cameras and the doorbell are read-only; the MCP server runs over stdio, one process per client, with no shared
+HTTP transport yet; and devices on a second subnet have not been tested.
 
 ## License
 

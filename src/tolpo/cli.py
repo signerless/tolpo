@@ -1,15 +1,22 @@
-"""Command line: `serve` runs the HTTP API, `mcp` the MCP server, `scan` prints what it finds."""
+"""Command line: `serve` runs the HTTP API, `mcp` the MCP server, `scan` prints what it finds, `snapshot` saves one
+picture from a camera so you can check the setup yourself, and `watch` opens a live window of a camera."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import logging
+import os
+import shutil
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 from .config import Config, is_loopback, load_config
-from .registry import Registry
+from .registry import NotEnabled, Registry, RegistryError
+from .snapshot import FEED_INPUT, GrabError, pump, scrub
+from .views import clean
 
 NO_CREDENTIALS = (
     "No Tapo account configured. Set TAPO_EMAIL and TAPO_PASSWORD, or put them in\n"
@@ -43,6 +50,96 @@ async def _scan(cfg: Config) -> None:
         await registry.stop()
 
 
+NOT_ENABLED = (
+    "To allow pictures from this camera, put its name under [cameras] in ~/.config/tolpo/config.toml:\n"
+    '    snapshots = ["<the camera name as shown in the Tapo app>"]\n'
+    "plus the camera account (username and password) that you create in the Tapo app. See the README."
+)
+
+
+def _complain(exc: RegistryError) -> int:
+    """Tell the owner what went wrong, with more detail than an agent gets."""
+    print(f"{exc}.", file=sys.stderr)
+    if exc.detail:
+        print(f"ffmpeg said:\n{exc.detail}", file=sys.stderr)
+    if isinstance(exc, NotEnabled):
+        print(NOT_ENABLED, file=sys.stderr)
+    return 1
+
+
+async def _snapshot(cfg: Config, ref: str, output: str, quality: str) -> int:
+    """Save one picture to a file only you can read. The picture is not printed or sent anywhere."""
+    registry = Registry(cfg)
+    try:
+        await registry.discover()
+        picture = await registry.snapshot(registry.resolve_one(ref), quality)
+    except RegistryError as exc:
+        return _complain(exc)
+    finally:
+        await registry.stop()
+    fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        out.write(picture.data)
+    print(f"{output}: {picture.width}x{picture.height}, {len(picture.data) // 1024} KB")
+    return 0
+
+
+def _find_ffplay(cfg: Config) -> str | None:
+    if cfg.ffmpeg and (sibling := Path(cfg.ffmpeg).with_name("ffplay")).is_file():
+        return str(sibling)
+    return shutil.which("ffplay")
+
+
+async def _tail(stream: asyncio.StreamReader, keep: collections.deque) -> None:
+    while line := await stream.readline():
+        keep.append(line.decode("utf-8", "replace").rstrip())
+
+
+async def _watch(cfg: Config, ref: str, quality: str, seconds: int | None = None, ffplay: str | None = None) -> int:
+    """Open a live window of a camera on this screen. Nothing is recorded and nothing goes to an agent."""
+    registry = Registry(cfg)
+    proc = None
+    tasks: list[asyncio.Task] = []
+    try:
+        await registry.discover()
+        entry = registry.resolve_one(ref)
+        player = ffplay or _find_ffplay(cfg)
+        if player is None:
+            print("ffplay was not found. It comes with ffmpeg: install a full ffmpeg, or set [cameras] ffmpeg.", file=sys.stderr)
+            return 1
+        url, feed, secret = await registry.live_view(entry, quality)
+        argv = [player, "-hide_banner", "-loglevel", "warning", "-window_title", clean(entry.device.alias or entry.slug)]
+        argv += ["-t", str(seconds)] if seconds else []
+        argv += ["-rtsp_transport", "tcp", "-i", url] if url else [*FEED_INPUT, "-i", "pipe:0"]
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdin=asyncio.subprocess.PIPE if feed is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        said: collections.deque = collections.deque(maxlen=20)
+        tasks.append(asyncio.create_task(_tail(proc.stderr, said)))
+        complaint = asyncio.create_task(pump(feed, proc.stdin)) if feed is not None else None
+        if complaint is not None:
+            tasks.append(complaint)
+        print(f"Live view of {entry.slug}. Close the window to stop.", file=sys.stderr)
+        await proc.wait()
+        if complaint is not None and complaint.done() and isinstance(complaint.result(), GrabError):
+            print(f"The camera stopped the video: {complaint.result()}.", file=sys.stderr)
+            return 1
+        if proc.returncode:
+            print(scrub("\n".join(said), (secret,)), file=sys.stderr)
+        return 1 if proc.returncode else 0
+    except RegistryError as exc:
+        return _complain(exc)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        await registry.stop()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tolpo", description=__doc__)
     parser.add_argument("--config", help="path to config.toml")
@@ -52,6 +149,14 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--port", type=int)
     sub.add_parser("scan", help="discover devices and print them")
     sub.add_parser("mcp", help="run as an MCP server over stdio, for Claude Code and other agents")
+    snap = sub.add_parser("snapshot", help="save one still picture from a camera you enabled, to check the setup")
+    snap.add_argument("camera", help="camera id or name")
+    snap.add_argument("-o", "--output", default="snapshot.jpg", help="file to write (default: snapshot.jpg)")
+    snap.add_argument("--quality", choices=("low", "high"), default="low")
+    watch = sub.add_parser("watch", help="open a live window of a camera you enabled (needs ffplay, which comes with ffmpeg)")
+    watch.add_argument("camera", help="camera id or name")
+    watch.add_argument("--quality", choices=("low", "high"), default="low")
+    watch.add_argument("--seconds", type=int, help="close the window after this many seconds")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -64,6 +169,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "scan":
         asyncio.run(_scan(cfg))
         return
+    if args.command == "watch":
+        sys.exit(asyncio.run(_watch(cfg, args.camera, args.quality, args.seconds)))
+    if args.command == "snapshot":
+        sys.exit(asyncio.run(_snapshot(cfg, args.camera, args.output, args.quality)))
     if args.command == "mcp":
         from .mcp_server import run
 

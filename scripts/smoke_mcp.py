@@ -13,7 +13,7 @@ from pathlib import Path
 
 from mcp import Client, StdioServerParameters
 
-EXPECTED = {"home_overview", "list_devices", "get_device", "set_power", "set_light", "set_feature", "rescan"}
+EXPECTED = {"home_overview", "list_devices", "get_device", "camera_snapshot", "set_power", "set_light", "set_feature", "rescan"}
 
 CONFIG = """\
 [tapo]
