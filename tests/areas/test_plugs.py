@@ -194,6 +194,23 @@ async def test_child_socket_and_switch_targeting(make_house):
     for wrong in ("strip", "office-1", "hallway-cam"):
         with pytest.raises(Forbidden):
             await plugs.countdown(reg, caller, wrong, 10, False)
+    assert len(caller.sent) == 2
+
+
+@pytest.mark.parametrize("parent_type", [DeviceType.Strip, DeviceType.WallSwitch, DeviceType.Plug])
+async def test_parent_with_children_is_never_a_target(make_house, parent_type):
+    gangs = [fakes.FakeDevice("gang-1", "Gang One", "S220", DeviceType.WallSwitch),
+             fakes.FakeDevice("gang-2", "Gang Two", "S220", DeviceType.WallSwitch)]
+    parent = fakes.FakeDevice("parent-1", "Parent", "S220", parent_type, children=gangs)
+    reg, caller, _ = make_house(tier=3, extra=[parent])
+    for fn, args in ((plugs.countdown, (10, True)), (plugs.delete_rule, ("schedule", "r1")),
+                     (plugs.enable_rule, ("schedule", False)), (plugs.set_default_state, ("always_on",)),
+                     (plugs.write, ("clear_energy_data",)), (plugs.hardware, ("state",))):
+        with pytest.raises(Forbidden):
+            await fn(reg, caller, "parent", *args)
+    assert caller.sent == []
+    await plugs.countdown(reg, caller, "gang-two", 10, False)
+    assert [slug for slug, _, _ in caller.sent] == ["gang-two"]
 
 
 async def test_rule_output_hides_unknown_nested_values_and_flattens_text(make_house):

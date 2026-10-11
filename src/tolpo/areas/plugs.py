@@ -350,7 +350,9 @@ def calendar(days, on_date):
 
 def target(registry, device, kinds=KINDS):
     entry = registry.resolve_one(device)
-    if entry.kind not in kinds or entry.device.device_type.name == "Strip":
+    # A parent with children (a power strip, a multi-gang switch) is never a target: a write there could act on
+    # every socket at once. Each socket or gang is its own entry and goes through python-kasa's child protocol.
+    if entry.kind not in kinds or entry.device.device_type.name == "Strip" or getattr(entry.device, "children", None):
         raise Forbidden(f"{views.clean(entry.slug)}: plug or switch required")
     if kinds == HARDWARE_KINDS and entry.kind != "switch" and entry.device.device_type.name != "Dimmer":
         raise Forbidden(f"{views.clean(entry.slug)}: wall switch or dimmer required")
