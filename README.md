@@ -76,6 +76,21 @@ reports. Run `tolpo scan` to find out. If a device works or does not, tell us th
 
 ## Installation
 
+### With npx
+
+You need [Node](https://nodejs.org) and [uv](https://docs.astral.sh/uv/). Nothing is installed globally:
+
+```bash
+npx -y tolpo scan      # find your devices
+npx -y tolpo mcp       # run as an MCP server
+```
+
+tolpo is a Python program. The npm package carries the Python code and runs it with uv, so the first run
+downloads about forty Python packages and takes longer than later runs. If an AI client gives up waiting, run
+`npx -y tolpo --help` once and start the client again.
+
+### From source
+
 ```bash
 git clone https://github.com/signerless/tolpo && cd tolpo
 uv venv --python 3.13 .venv
@@ -119,24 +134,28 @@ interval_seconds = 600
 allow_write = []
 ```
 
-Verify your setup with a read-only scan:
-
-```bash
-.venv/bin/tolpo scan
-```
+Verify your setup with a read-only scan: `npx -y tolpo scan`, or `.venv/bin/tolpo scan` from a source checkout.
 
 ## Usage with Claude (MCP)
 
-Register the server once:
+Put your credentials in `~/.config/tolpo/config.toml` (see Configuration, and `chmod 600` it). The server
+reads that file by itself, so nothing secret ends up in your AI client's settings. Then register the server
+once:
 
 ```bash
-claude mcp add tolpo \
-  -e TOLPO_CREDENTIALS_FILE=$HOME/.tapo_config.json \
-  -- $PWD/.venv/bin/tolpo mcp
+claude mcp add tolpo -- npx -y tolpo mcp
 ```
 
-Use `-e TAPO_EMAIL=... -e TAPO_PASSWORD=...` instead if your credentials live elsewhere. After the
-next restart you can ask things like "dim office-1 to 30%", "is any door open?" or "what is the
+From a source checkout, point at your own copy instead:
+
+```bash
+claude mcp add tolpo -- $PWD/.venv/bin/tolpo mcp
+```
+
+If you would rather keep the credentials out of a file, pass them with `-e TAPO_EMAIL=... -e TAPO_PASSWORD=...`,
+but your client will then store them in its own settings in plain text.
+
+After the next restart you can ask things like "dim office-1 to 30%", "is any door open?" or "what is the
 temperature upstairs?".
 
 | Tool | What it does |
@@ -156,7 +175,8 @@ thousand tokens.
 ## Usage over HTTP
 
 ```bash
-.venv/bin/tolpo serve        # http://127.0.0.1:8765, interactive docs at /docs
+npx -y tolpo serve          # or .venv/bin/tolpo serve from a source checkout
+# http://127.0.0.1:8765, interactive docs at /docs
 ```
 
 ```bash
