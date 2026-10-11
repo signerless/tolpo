@@ -145,18 +145,18 @@ def ready_house(make_house, **kwargs):
 # Expected tiers are independent of the area catalog so a risk downgrade fails this test.
 READ_METHODS = {
     "getLastAlarmInfo", "getCallStateInfo", "get_trigger_logs", "get_chime_alarm_configure", "get_support_alarm_type_list",
-    "getRingStatus", "getRingSoundConfig", "getRingTypeList", "getRingPlay", "getHubRingStatus", "getHubRingSoundConfig", "getHubRingTypeList", "getHubRingPlay", "getHubRingPlan", "getChimeRingPlan", "getExistingChimeCfg", "getQuickRespList", "getSmartRespStatus", "getSmartRespConfig", "getAntiTheftEnable", "getAntiTheftStatus", "getWakeUpConfig", "getBatteryOperatingMode", "getLedColor", "getSirenTypeList", "getSirenConfig", "getSirenStatus",
+    "getRingStatus", "getRingSoundConfig", "getRingTypeList", "getRingPlay", "getHubRingStatus", "getHubRingSoundConfig", "getHubRingTypeList", "getHubRingPlay", "getHubRingPlan", "getChimeRingPlan", "getExistingChimeCfg", "getQuickRespList", "getSmartRespStatus", "getSmartRespConfig", "getAntiTheftEnable", "getAntiTheftStatus", "getWakeUpConfig", "getBatteryOperatingMode", "getLedColor", "getSirenTypeList",
 }
 SETTING_METHODS = {
-    "set_chime_alarm_configure", "setRingSoundConfig", "setHubRingSoundConfig", "setRingStatus", "setHubRingStatus", "setHubRingPlan", "setChimeRingPlan", "setSmartRespConfig", "setSmartRespStatus", "setWakeUpConfig", "setBatteryOperatingMode", "setLedColor", "setPreWakeup", "setSirenConfig",
+    "set_chime_alarm_configure", "setRingSoundConfig", "setHubRingSoundConfig", "setRingStatus", "setHubRingStatus", "setHubRingPlan", "setChimeRingPlan", "setSmartRespConfig", "setSmartRespStatus", "setWakeUpConfig", "setBatteryOperatingMode", "setLedColor", "setPreWakeup",
 }
-SECURITY_METHODS = {"play_alarm", "stop_alarm", "setRingPlay", "setHubRingPlay", "setExistingChimeCfg", "playQuickResp", "stopQuickResp", "setSirenStatus", "setAntiTheftEnable"}
+SECURITY_METHODS = {"play_alarm", "stop_alarm", "setRingPlay", "setHubRingPlay", "setExistingChimeCfg", "playQuickResp", "stopQuickResp", "setAntiTheftEnable"}
 
 
 def method_device(method):
     if method in {"get_chime_alarm_configure", "get_support_alarm_type_list", "set_chime_alarm_configure", "play_alarm", "stop_alarm"}:
         return "hall-chime"
-    if method in {"setPreWakeup", "getSirenTypeList", "getSirenConfig", "getSirenStatus", "setSirenConfig", "setSirenStatus"}:
+    if method in {"setPreWakeup", "getSirenTypeList"}:
         return "tapo-h200"
     return "front-bell"
 
@@ -246,9 +246,6 @@ TOOL_CASES = [
     ("doorbell_pre_wake", {"device": "front-bell"}, 2, "setPreWakeup"),
     ("doorbell_battery_mode_set", {"device": "front-bell", "mode": "battery_life_first"}, 2, "setBatteryOperatingMode"),
     ("doorbell_button_color_set", {"device": "front-bell", "color": "blue"}, 2, "setLedColor"),
-    ("chime_hub_sound_get", {"device": "tapo-h200"}, 0, "getSirenConfig"),
-    ("chime_hub_sound", {"device": "tapo-h200", "action": "play", "tone": "Doorbell Ring 10", "confirm": "setSirenStatus tapo-h200"}, 3, "setSirenStatus"),
-    ("chime_hub_sound", {"device": "tapo-h200", "action": "stop", "confirm": "setSirenStatus tapo-h200"}, 3, "setSirenStatus"),
 ]
 
 
@@ -336,37 +333,18 @@ async def test_exact_write_shapes(make_house):
     ]
 
 
-async def test_h200_fixture_sound_reads_and_smartcam_tone_routing(make_house):
+async def test_h200_fixture_tones_and_siren_left_to_the_hub_area(make_house):
     from kasa.protocols.smartcamprotocol import SmartCamProtocol
     reg, caller = ready_house(make_house, tier=3)
     reg.resolve_one("tapo-h200").device.protocol = object.__new__(SmartCamProtocol)
-    out = await doorbell.hub_sound_get(reg, caller, "tapo-h200")
-    assert out == {"device": "tapo-h200", "values": {"getSirenConfig": {"siren_type": "Doorbell Ring 10", "duration": 300, "volume": "6"}, "getSirenStatus": {"status": "off", "time_left": 0}}, "tones": ["Doorbell Ring 1", "Doorbell Ring 10", "Phone Ring"]}
-    assert await doorbell._available_tones(caller, reg.resolve_one("tapo-h200")) == out["tones"]
-    with pytest.raises(BadRequest, match="chime_hub_sound"):
+    assert await doorbell._available_tones(caller, reg.resolve_one("tapo-h200")) == ["Doorbell Ring 1", "Doorbell Ring 10", "Phone Ring"]
+    assert caller.sent == [("tapo-h200", "getSirenTypeList", {"siren": {}})]
+    with pytest.raises(BadRequest, match="hub_siren"):
         await doorbell.chime_sound_action(reg, caller, "tapo-h200", "play", "ding", confirm="play_alarm tapo-h200")
     assert "get_support_alarm_type_list" not in caller.methods_sent()
-
-
-async def test_hub_sound_checks_all_permissions_before_config_and_reports_partial_change(make_house):
-    from tolpo.calls import NeedsConfirmation
-    reg, caller = ready_house(make_house, tier=2)
-    with pytest.raises(Forbidden):
-        await doorbell.hub_sound_action(reg, caller, "tapo-h200", "play", "Doorbell Ring 10", confirm="setSirenStatus tapo-h200")
-    assert not caller.sent
-    reg, caller = ready_house(make_house, tier=3)
-    with pytest.raises(NeedsConfirmation):
-        await doorbell.hub_sound_action(reg, caller, "tapo-h200", "play", "Doorbell Ring 10")
-    assert not caller.sent
-    reg, caller = ready_house(make_house, tier=0, allow_methods=["setSirenStatus"])
-    with pytest.raises(Forbidden):
-        await doorbell.hub_sound_action(reg, caller, "tapo-h200", "play", "Doorbell Ring 10", confirm="setSirenStatus tapo-h200")
-    assert not caller.sent
-    reg, caller = ready_house(make_house, tier=3)
-    caller.respond("setSirenStatus", DeviceUnavailable("SECRET"))
-    with pytest.raises(DeviceUnavailable, match="settings changed, but setSirenStatus failed"):
-        await doorbell.hub_sound_action(reg, caller, "tapo-h200", "play", "Doorbell Ring 10", confirm="setSirenStatus tapo-h200")
-    assert caller.sent[-2:] == [("tapo-h200", "setSirenConfig", {"siren": {"siren_type": "Doorbell Ring 10", "volume": "6", "duration": 1}}), ("tapo-h200", "setSirenStatus", {"siren": {"status": "on"}})]
+    # The hub siren is the hub area's: this area never rewrites the hub's saved alarm sound or sounds it.
+    declared = {rule.method for rule in doorbell.METHODS}
+    assert not declared & {"setSirenConfig", "setSirenStatus", "getSirenConfig", "getSirenStatus"}
 
 
 INVALID_CALLS = [

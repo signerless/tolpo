@@ -7,9 +7,7 @@ id confirmation phrase on every call. Every successful write refreshes device st
 - `doorbell_events_recent`: Poll last alarm, call state and child-scoped hub trigger logs as compact observations.
 - `chime_settings_get`: Read a paired doorbell's chime tone, volume, duration, enable state and available tones.
 - `chime_settings_set`: Set those per-doorbell chime settings at level 2.
-- `chime_sound`: Play or stop a standalone chime or SMART hub sound at level 3 with confirmation.
-- `chime_hub_sound_get`: Read H200 sound configuration, status and available tones.
-- `chime_hub_sound`: Play or stop H200 sound at level 3; playing also changes saved sound settings at level 2.
+- `chime_sound`: Play or stop a standalone chime or H100 sound at level 3 with confirmation.
 - `doorbell_settings_get`: Read ring settings, hub/chime plans, in-wall chime, auto response, anti-theft, wake-up, battery mode or button color.
 - `doorbell_ring_sound_set`: Set the doorbell or connected hub ring tone and volume at level 2.
 - `doorbell_ring_enabled_set`: Enable or disable ringing at the doorbell or its connected hub at level 2.
@@ -26,8 +24,7 @@ id confirmation phrase on every call. Every successful write refreshes device st
 - `doorbell_button_color_set`: Change the button LED color name at level 2.
 
 All execution tests use fakes. No device or network connection was made during this build.
-Sanitized fixtures arrived during the build. H200 `getSirenConfig`, `getSirenStatus` and `getSirenTypeList` response shapes
-match them. Read fixture data is distinct from testing a write. Every write remains UNVERIFIED on hardware.
+Sanitized fixtures arrived during the build. The H200 `getSirenTypeList` response shape matches them. Read fixture data is distinct from testing a write. Every write remains UNVERIFIED on hardware.
 The D230 fixture contains generic camera settings, but no ring, reply, wake-up or anti-theft response.
 There is no standalone chime fixture. All doorbell-specific response shapes remain UNVERIFIED.
 
@@ -51,11 +48,10 @@ Check `get_chime_alarm_configure` and `set_chime_alarm_configure` on each model 
 configuration changes. UNVERIFIED: cached address separators, optional `func_type` behavior and model duration limits.
 
 Chime volumes are `mute`, `low`, `normal` and `high`. Tones must be advertised. The 1 to 600 second chime bound comes
-from python-kasa's SMART hub alarm module. H200 preview uses numeric volume 0 through 10 and duration 1 through 6000
-seconds, matching its python-kasa siren module. Confirm SMART sounds with `play_alarm DEVICE_ID` or `stop_alarm DEVICE_ID`.
-Confirm H200 sounds with `setSirenStatus DEVICE_ID`. Before H200 playback, both configuration permission and sound
-confirmation are checked. Its sound settings persist after a preview. If playback fails after configuration succeeds,
-the error says the settings changed. Check `setSirenConfig` and `setSirenStatus` on H200 hardware.
+from python-kasa's SMART hub alarm module. Confirm sounds with `play_alarm DEVICE_ID` or `stop_alarm DEVICE_ID`.
+A preview passes its tone, volume and duration with `play_alarm` and does not change the saved settings.
+The H200 siren is the hub's own alarm sound. Read it with `hub_alarm_config`, change it with `hub_alarm_set` and sound
+it with `hub_siren` (hub area). This area only reads the H200 tone list.
 
 UNVERIFIED: Doorbell ring and hub ring wrappers vary with component versions. The default doorbell wrappers follow
 ring version 3. `legacy=true` selects older read, enable and preview wrappers without retrying failed writes.

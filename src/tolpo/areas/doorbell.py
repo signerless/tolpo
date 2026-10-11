@@ -6,8 +6,6 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 from kasa.protocols.smartcamprotocol import SmartCamProtocol
 
-from ..calls import NeedsConfirmation
-
 from .. import policy
 from ..policy import Tier
 from ..registry import BadRequest, DeviceUnavailable, Forbidden, RegistryError
@@ -103,7 +101,7 @@ async def chime_sound_action(registry, caller, device, action, tone=None, volume
     _choice(action, ("play", "stop"), "action")
     entry = _entry(registry, device, ["chime", "hub"])
     if _smartcam_hub(entry):
-        raise BadRequest("Use chime_hub_sound for this hub")
+        raise BadRequest("This hub plays its siren through hub_siren")
     if action == "stop":
         return await _write(registry, caller, entry, "stop_alarm", confirm=confirm, changed="sound stopped")
     _choice(volume, ("mute", "low", "normal", "high"), "volume")
@@ -338,12 +336,10 @@ async def button_color(registry, caller, device, color):
     # UNVERIFIED: the name wrapper is known, but available color names vary by model.
     return await _write(registry, caller, entry, "setLedColor", {"led": {"color": {"name": color}}}, changed={"button_led_color": color})
 
+# The H200 lists its tones with getSirenTypeList (same level as the hub area). Its siren itself is the hub area's
+# job (hub_alarm_config, hub_alarm_set, hub_siren), so this area does not send setSirenConfig or setSirenStatus.
 METHODS += [
     policy.method("getSirenTypeList", Tier.READ, ["hub"], "Read the hub's available ring and alarm tones."),
-    policy.method("getSirenConfig", Tier.READ, ["hub"], "Read the hub's current sound configuration."),
-    policy.method("getSirenStatus", Tier.READ, ["hub"], "Read whether the hub is sounding."),
-    policy.method("setSirenConfig", Tier.SETTING, ["hub"], "Change the hub sound tone, volume and duration."),
-    policy.method("setSirenStatus", Tier.SECURITY, ["hub"], "Play or stop an audible hub sound."),
 ]
 
 
@@ -358,55 +354,6 @@ async def _available_tones(caller, entry):
     result = await _call(caller, entry, "get_support_alarm_type_list")
     return _tone_list(result, "alarm_type_list")
 
-
-def _preflight(caller, entry, method, confirm=None):
-    """Check all steps of a compound action before changing its first setting."""
-    plan = caller.plan(entry, method)
-    if not plan["allowed"]:
-        raise Forbidden(f"{method}: the owner's policy blocks this action")
-    if "confirm" in plan and confirm != plan["confirm"]:
-        raise NeedsConfirmation(f"{method}: call again with confirm={plan['confirm']!r}")
-
-
-async def hub_sound_get(registry, caller, device):
-    entry = _entry(registry, device, ["hub"])
-    values = {}
-    for method, fields in (("getSirenConfig", ("siren_type", "duration", "volume")), ("getSirenStatus", ("status", "time_left"))):
-        value = _compact(await _call(caller, entry, method, {"siren": {}}), fields)
-        if value:
-            values[method] = value
-    tones = _tone_list(await _call(caller, entry, "getSirenTypeList", {"siren": {}}), "siren_type_list")
-    out = {"device": clean(entry.slug)}
-    if values:
-        out["values"] = values
-    if tones:
-        out["tones"] = tones
-    return out
-
-
-async def hub_sound_action(registry, caller, device, action, tone=None, volume=6, duration=1, confirm=None):
-    _choice(action, ("play", "stop"), "action")
-    entry = _entry(registry, device, ["hub"])
-    _preflight(caller, entry, "setSirenStatus", confirm)
-    if action == "play":
-        _text(tone, "tone")
-        _integer(volume, 0, 10, "volume")
-        _integer(duration, 1, 6000, "duration")
-        _preflight(caller, entry, "setSirenConfig")
-        tones = _tone_list(await _call(caller, entry, "getSirenTypeList", {"siren": {}}), "siren_type_list")
-        if tone not in tones:
-            raise BadRequest("The hub does not advertise this tone")
-        config = {"siren_type": tone, "volume": str(volume), "duration": duration}
-        await _write(registry, caller, entry, "setSirenConfig", {"siren": config}, changed=config)
-    try:
-        out = await _write(registry, caller, entry, "setSirenStatus", {"siren": {"status": "on" if action == "play" else "off"}}, confirm, f"sound {action}")
-    except DeviceUnavailable:
-        if action == "play":
-            raise DeviceUnavailable(f"{clean(entry.slug)}: sound settings changed, but setSirenStatus failed") from None
-        raise
-    if action == "play":
-        out["settings_changed"] = config
-    return out
 
 Device = Annotated[str, Field(description="Device id or name")]
 Confirm = Annotated[str | None, Field(description="Exact method and device id confirmation phrase")]
@@ -566,7 +513,7 @@ def tools(ctx):
         duration: Annotated[int, Field(description="Sound duration in seconds", ge=1, le=600, strict=True)] = 1,
         confirm: Confirm = None,
     ) -> dict[str, Any]:
-        """Play or stop sound on a chime, H100 or H200. Level 3. Confirm play_alarm DEVICE or stop_alarm DEVICE. UNVERIFIED on hardware."""
+        """Play or stop sound on a chime or an H100. An H200 uses hub_siren. Level 3. Confirm play_alarm DEVICE or stop_alarm DEVICE. UNVERIFIED on hardware."""
         await ctx.ready_for([device])
         with ctx.translated():
             return await chime_sound_action(ctx.registry, ctx.caller, device, action, tone, volume, duration, confirm)
@@ -723,24 +670,3 @@ def tools(ctx):
         await ctx.ready_for([device])
         with ctx.translated():
             return await button_color(ctx.registry, ctx.caller, device, color)
-
-    @ctx.tool(title="Hub ring and alarm sounds")
-    async def chime_hub_sound_get(device: Device) -> dict[str, Any]:
-        """Read H200 sound config, status and tones. Read shapes match a sanitized H200 fixture."""
-        await ctx.ready_for([device])
-        with ctx.translated():
-            return await hub_sound_get(ctx.registry, ctx.caller, device)
-
-    @ctx.tool(title="Play or stop H200 sound", tier=Tier.SECURITY)
-    async def chime_hub_sound(
-        device: Device,
-        action: Annotated[Literal["play", "stop"], Field(description="Audible sound or stop")],
-        tone: Annotated[str | None, Field(description="Hub-advertised tone; required for play")] = None,
-        volume: Annotated[int, Field(description="Hub volume gear", ge=0, le=10, strict=True)] = 6,
-        duration: Annotated[int, Field(description="Sound duration in seconds", ge=1, le=6000, strict=True)] = 1,
-        confirm: Confirm = None,
-    ) -> dict[str, Any]:
-        """Play or stop hub sound at level 3. Confirm setSirenStatus DEVICE. Play also changes saved sound settings at level 2. Writes are UNVERIFIED on H200."""
-        await ctx.ready_for([device])
-        with ctx.translated():
-            return await hub_sound_action(ctx.registry, ctx.caller, device, action, tone, volume, duration, confirm)
