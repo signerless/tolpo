@@ -122,6 +122,19 @@ def test_camera_settings_come_from_the_file_and_the_environment(tmp_path, monkey
     assert load_config(str(path)).snapshots == ()  # an empty variable switches pictures off
 
 
+def test_the_clip_folder_comes_from_the_file_and_the_environment(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('[tapo]\nemail="a@x.com"\npassword="p"\n[cameras]\nclip_dir="/var/clips"\n')
+    path.chmod(0o600)
+    monkeypatch.delenv("TOLPO_CLIP_DIR", raising=False)
+    assert load_config(str(path)).clip_dir == "/var/clips"
+    monkeypatch.setenv("TOLPO_CLIP_DIR", "/elsewhere")
+    assert load_config(str(path)).clip_dir == "/elsewhere"
+    assert load_config(str(tmp_path / "missing.toml")).clip_dir == "/elsewhere"
+    monkeypatch.delenv("TOLPO_CLIP_DIR")
+    assert load_config(str(tmp_path / "missing.toml")).clip_dir == ""  # no folder, no clips
+
+
 def test_pictures_are_off_unless_configured(tmp_path):
     cfg = load_config(str(tmp_path / "missing.toml"))
     assert cfg.snapshots == () and cfg.camera_username == "" and cfg.camera_password == ""

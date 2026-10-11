@@ -37,6 +37,7 @@ class Config:
     camera_password: str = field(default="", repr=False)
     snapshots: tuple[str, ...] = ()
     ffmpeg: str = ""  # path to ffmpeg; empty means look for it on PATH
+    clip_dir: str = ""  # the one folder where saved camera clips go; empty means clips cannot be saved
     tier: int = 1  # the highest level of device method an agent may use; see policy.Tier
     allow_methods: frozenset[str] = frozenset()  # single device methods allowed above `tier`
     areas: tuple[str, ...] = ()  # which area modules offer tools; empty means all of them
@@ -102,6 +103,7 @@ def load_config(path: str | None = None) -> Config:
         camera_password=os.environ.get("TOLPO_CAMERA_PASSWORD", cameras.get("password", "")),
         snapshots=_names(snapshots),
         ffmpeg=os.environ.get("TOLPO_FFMPEG", cameras.get("ffmpeg", "")),
+        clip_dir=os.environ.get("TOLPO_CLIP_DIR", cameras.get("clip_dir", "")),
         tier=int(os.environ.get("TOLPO_TIER", policy.get("tier", 1))),
         allow_methods=frozenset(policy.get("allow_methods", ())),
         areas=_names(os.environ["TOLPO_AREAS"].split(",") if "TOLPO_AREAS" in os.environ else server.get("areas", ())),

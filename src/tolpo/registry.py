@@ -164,7 +164,7 @@ class Registry:
         self._task: asyncio.Task | None = None
         self.ready = asyncio.Event()  # set once the first discovery has finished, successfully or not
         self._discovery_lock = asyncio.Lock()
-        self._grabs = asyncio.Semaphore(2)  # ffmpeg decodes video; do not run a pile of them at once
+        self.grabs = asyncio.Semaphore(2)  # ffmpeg decodes video; do not run a pile of them at once
         self._rejected: dict[str, float] = {}  # slug -> when the camera last refused our login for video
 
     # ---- lifecycle -------------------------------------------------------
@@ -669,7 +669,7 @@ class Registry:
             raise BadRequest(f"{feature_id} cannot be set directly")
         await self._run(entry, lambda: feat.set_value(value))
 
-    async def _check_picture(self, entry: Entry, quality: str) -> None:
+    async def check_picture(self, entry: Entry, quality: str) -> None:
         """Everything that must hold before any video is opened. Raises an error an agent may read."""
         if quality not in QUALITIES:
             raise BadRequest(f"quality must be one of {', '.join(QUALITIES)}")
@@ -700,7 +700,11 @@ class Registry:
             return url, None, self.cfg.camera_password
         return None, live_chunks(entry.device.host, self.cfg.password, quality), self.cfg.password
 
-    def _failure(self, entry: Entry, exc: GrabError) -> RegistryError:
+    def note_login_rejected(self, entry: Entry) -> None:
+        """A camera refused our login for video: leave it alone for a while, repeated failures can lock it out."""
+        self._rejected[entry.slug] = time.monotonic()
+
+    def picture_failure(self, entry: Entry, exc: GrabError) -> RegistryError:
         log.warning("no picture from %s: %s", entry.slug, exc.reason)
         if exc.reason == "auth":
             self._rejected[entry.slug] = time.monotonic()
@@ -710,14 +714,14 @@ class Registry:
 
     async def snapshot(self, entry: Entry, quality: str = "low") -> Picture:
         """One still picture from a camera the owner has enabled. Every error message is fit for an agent to read."""
-        await self._check_picture(entry, quality)
+        await self.check_picture(entry, quality)
         url, feed, secret = self._stream(entry, quality)
-        async with entry.picture_lock, self._grabs:
+        async with entry.picture_lock, self.grabs:
             started = time.monotonic()
             try:
                 picture = await grab(url, feed=feed, ffmpeg=self.cfg.ffmpeg or "ffmpeg", secrets=(secret,))
             except GrabError as exc:
-                raise self._failure(entry, exc) from None
+                raise self.picture_failure(entry, exc) from None
         log.info(
             "picture from %s (%s, %s): %dx%d, %d KB, %.1f s",
             entry.slug, quality, "app channel" if feed is not None else "rtsp",
@@ -728,7 +732,7 @@ class Registry:
     async def live_view(self, entry: Entry, quality: str = "low") -> tuple[str | None, AsyncIterator[bytes] | None, str]:
         """The same checks as a picture, then the stream itself for a player on the owner's own screen:
         an RTSP address, or the app's channel as MPEG-TS chunks. Returns (url, feed, secret to scrub)."""
-        await self._check_picture(entry, quality)
+        await self.check_picture(entry, quality)
         log.info("live view of %s (%s)", entry.slug, quality)
         return self._stream(entry, quality)
 

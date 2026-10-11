@@ -409,7 +409,7 @@ def media_address(entry: Entry) -> tuple[str, int]:
 
 async def _video_allowed(registry: Registry, entry: Entry) -> None:
     """The same checks as a live picture: listed by the owner, a camera of its own, privacy off, not just rejected."""
-    await registry._check_picture(entry, "low")
+    await registry.check_picture(entry, "low")
 
 
 async def thumbnail(registry: Registry, entry: Entry, start_time: str | None, file_id: str | None) -> snapshot.Picture:
@@ -427,24 +427,24 @@ async def thumbnail(registry: Registry, entry: Entry, start_time: str | None, fi
     async with entry.picture_lock:
         try:
             fmt, data = await media.fetch_image(host, registry.cfg.password, request, port=port)
-            async with registry._grabs:
+            async with registry.grabs:
                 return await snapshot.decode_still(data, fmt, ffmpeg=registry.cfg.ffmpeg or "ffmpeg")
         except GrabError as exc:
-            raise registry._failure(entry, exc) from None
+            raise registry.picture_failure(entry, exc) from None
 
 
 async def live_frames(registry: Registry, entry: Entry, count: int, seconds: float, quality: str) -> list[snapshot.Picture]:
     if not 2 <= count <= snapshot.MAX_FRAMES or not 1 <= seconds <= snapshot.MAX_SPAN:
         raise BadRequest(f"frames must be 2 to {snapshot.MAX_FRAMES} and seconds 1 to {snapshot.MAX_SPAN:.0f}")
     url, feed, secret = await registry.live_view(entry, quality)
-    async with entry.picture_lock, registry._grabs:
+    async with entry.picture_lock, registry.grabs:
         try:
             return await snapshot.grab_frames(
                 url, feed=feed, count=count, seconds=seconds, ffmpeg=registry.cfg.ffmpeg or "ffmpeg",
                 max_width=640 if quality == "low" else snapshot.MAX_WIDTH, secrets=(secret,),
             )
         except GrabError as exc:
-            raise registry._failure(entry, exc) from None
+            raise registry.picture_failure(entry, exc) from None
 
 
 def clip_folder(registry: Registry) -> Path:
@@ -518,7 +518,7 @@ async def download_clip(registry: Registry, entry: Entry, start_time: str, secon
         except GrabError as exc:
             partial.unlink(missing_ok=True)
             if exc.reason == "auth":
-                registry._rejected[entry.slug] = time.monotonic()
+                registry.note_login_rejected(entry)
             log.warning("no recording from %s: %s", entry.slug, exc.reason)
             raise DeviceUnavailable(f"no recording from {entry.slug}: {exc}") from None
         except BaseException:
