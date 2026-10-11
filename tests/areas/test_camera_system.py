@@ -62,11 +62,25 @@ async def test_ptz_policy_and_errors(make_house, action, values, method, params,
 async def test_capability_refusal_and_kind(make_house):
     reg, caller = house(make_house, components=[])
     with pytest.raises(BadRequest, match="support for ptz"):
-        await area.ptz_action(reg, caller, "hallway-cam", "stop")
+        await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="horizontal")
     assert caller.methods_sent() == ["getAppComponentList"]
     caller.sent.clear()
-    with pytest.raises(BadRequest, match="not a camera"):
-        await area.ptz_action(reg, caller, "desk-lamp", "stop")
+    for action, values in [("stop", {}), ("cruise", {"axis": "stop"})]:
+        with pytest.raises(BadRequest, match="not a camera"):
+            await area.ptz_action(reg, caller, "desk-lamp", action, **values)
+    assert caller.sent == []
+
+
+async def test_stop_is_sent_even_when_capability_reads_fail(make_house):
+    """A stop must not depend on the component list: a timeout or an empty list still lets it through."""
+    for components in [TimeoutError(), {"app_component": {"app_component_list": []}}, {"error_code": -1}]:
+        reg, caller = house(make_house, tier=1)
+        caller.respond("getAppComponentList", components)
+        result = await area.ptz_stop(reg, caller, "hallway-cam")
+        assert caller.methods_sent() == ["stopMove"] and result["changed"] == "movement stopped"
+    reg, caller = house(make_house, tier=0)
+    with pytest.raises(Forbidden, match="level 1"):
+        await area.ptz_stop(reg, caller, "hallway-cam")
     assert caller.sent == []
 
 
@@ -498,7 +512,7 @@ async def test_sleeping_camera_error_mentions_ble_without_retry(make_house):
     reg, caller = house(make_house)
     caller.respond("getAppComponentList", TimeoutError())
     with pytest.raises(DeviceUnavailable, match="sleeping battery camera may need BLE"):
-        await area.ptz_action(reg, caller, "hallway-cam", "stop")
+        await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="stop")
     assert caller.methods_sent() == ["getAppComponentList"]
 
 
@@ -628,7 +642,7 @@ async def test_device_errors_never_echo_raw_private_data(make_house):
         assert safe in str(caught.value) and "SECRET" not in str(caught.value) and "rtsp" not in str(caught.value)
 
 
-@pytest.mark.parametrize("name,arguments,method", [case for case in TOOLS if area.WRITES.get(case[2], (0,))[0] > 0])
+@pytest.mark.parametrize("name,arguments,method", [case for case in TOOLS if area.WRITES.get(case[2], (0,))[0] > 0 and case[0] != "camera_ptz_stop"])
 async def test_every_write_tool_refuses_missing_features(make_house, mcp, name, arguments, method):
     reg, caller = full_house(make_house, 4)
     caller.respond("getAppComponentList", {"app_component": {"app_component_list": []}})
@@ -1136,7 +1150,7 @@ async def test_captured_response_shapes(make_house, model):
         assert result == {"device": "hallway-cam", **({"presets": expected} if expected else {})}
     if model == "C465":
         with pytest.raises(BadRequest, match="support for ptz"):
-            await area.ptz_action(reg, caller, "hallway-cam", "stop")
+            await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="horizontal")
     if model == "D230":
         assert "getAppComponentList" not in caller.methods_sent()
         assert "getChildDeviceComponentList" in caller.methods_sent()
@@ -1154,14 +1168,14 @@ async def test_child_component_pagination_and_errors(make_house):
         start = params["childControl"]["start_index"]
         return {"start_index": start, "sum": 2, "child_component_list": [{"device_id": "other" if start == 0 else "cam-1", "component_list": [{"name": "ptz", "version": 1}]}]}
     caller.respond("getChildDeviceComponentList", pages)
-    await area.ptz_action(reg, caller, "hallway-cam", "stop")
+    await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="stop")
     assert caller.sent[:2] == [("tapo-h200", "getChildDeviceComponentList", {"childControl": {"start_index": 0}}), ("tapo-h200", "getChildDeviceComponentList", {"childControl": {"start_index": 1}})]
     caller.respond("getChildDeviceComponentList", {"child_component_list": [], "sum": 0})
     with pytest.raises(BadRequest, match="did not report"):
-        await area.ptz_action(reg, caller, "hallway-cam", "stop")
+        await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="stop")
     caller.respond("getChildDeviceComponentList", {"error_code": -1})
     with pytest.raises(DeviceUnavailable, match="getChildDeviceComponentList"):
-        await area.ptz_action(reg, caller, "hallway-cam", "stop")
+        await area.ptz_action(reg, caller, "hallway-cam", "cruise", axis="stop")
 
 
 @pytest.mark.parametrize("setting,method,module,value", [

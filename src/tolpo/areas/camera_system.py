@@ -207,11 +207,20 @@ def text_input(value, label, limit=64):
     return value
 
 
+async def ptz_stop(registry, caller, device):
+    """Stop must always be sent. It skips the component read, so a slow or odd component list cannot block it.
+    A camera without a motor answers with an error, which is reported."""
+    entry = registry.resolve_one(device)
+    if entry.kind not in KINDS:
+        raise BadRequest(f"{entry.slug} is not a camera or doorbell")
+    return await write(registry, caller, entry, "stopMove", "motor", "stop", "null", "movement stopped")
+
+
 async def ptz_action(registry, caller, device, action, **values):
+    if action == "stop":
+        return await ptz_stop(registry, caller, device)
     entry, found = await components(registry, caller, device)
     require(entry, found, "patrol" if action in {"patrol", "add", "edit", "delete"} else "targetTrack" if action == "tracking" else "ptz")
-    if action == "stop":
-        return await write(registry, caller, entry, "stopMove", "motor", "stop", "null", "movement stopped")
     if action == "cruise":
         axis = values["axis"]
         if axis not in {"horizontal", "vertical", "stop"}:
@@ -631,8 +640,9 @@ def tools(ctx):
 
     @ctx.tool(title="Stop camera movement", tier=Tier.CONTROL)
     async def camera_ptz_stop(device: Device) -> dict[str, Any]:
-        """Stop manual movement on a camera that reports PTZ support."""
-        return await run(ptz_action, device, "stop")
+        """Stop pan and tilt movement now. Sent without any capability read first, so it works even when other reads fail.
+        A sweep stops with camera_ptz_cruise axis=stop and a patrol with camera_ptz_patrol enabled=false."""
+        return await run(ptz_stop, device)
 
     @ctx.tool(title="Camera sweep", tier=Tier.CONTROL)
     async def camera_ptz_cruise(device: Device, axis: Annotated[Literal["horizontal", "vertical", "stop"], Field(description="One sweep axis, or stop")]) -> dict[str, Any]:
