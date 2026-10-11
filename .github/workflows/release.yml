@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: The tag must match the versions in the repo
+        run: python3 scripts/check_release.py "$GITHUB_REF_NAME"
+      - name: Run the tests
+        run: |
+          uv venv --python 3.13 .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+          .venv/bin/python -m pytest -q
+      - name: Build the package
+        run: uv build
+      - name: Check the package metadata
+        run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tolpo/
+    permissions:
+      id-token: write # trusted publishing: no API token is stored anywhere
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-mcp-registry:
+    name: Publish to the MCP registry
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the registry checks the GitHub identity of this workflow
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wait until PyPI serves the new version with the ownership marker
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 30); do
+            if curl -sf "https://pypi.org/pypi/tolpo/${VERSION}/json" | grep -q "mcp-name: io.github.signerless/tolpo"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "PyPI did not serve version ${VERSION} with the marker in time" >&2
+          exit 1
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Authenticate to the MCP registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish the server
+        run: ./mcp-publisher publish

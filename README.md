@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img alt="tolpo" src="assets/logo-light.svg" width="280">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/signerless/tolpo/main/assets/logo-dark.svg">
+    <img alt="tolpo" src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/logo-light.svg" width="280">
   </picture>
 </p>
 
@@ -10,7 +10,7 @@
 <p align="center">
 
 [![CI](https://github.com/signerless/tolpo/actions/workflows/ci.yml/badge.svg)](https://github.com/signerless/tolpo/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/signerless/tolpo/blob/main/LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
 </p>
@@ -49,15 +49,15 @@ what python-kasa documents as supported but we have not tried.
 
 | | Device | Tested here | Documented by python-kasa, not tried here | What an agent gets |
 |---|---|---|---|---|
-| <img src="assets/devices/light.svg" width="36" alt="Light bulb"> | Color bulbs | L430C | L430P, L530B, L530E, L530EA, L535E | State, brightness, white temperature and color |
-| <img src="assets/devices/plug.svg" width="36" alt="Smart plug"> | Smart plugs | P115 | P110, P110M | State, plus power, voltage and current readings |
-| <img src="assets/devices/hub.svg" width="36" alt="Hub"> | Hubs | H200 | H100, and S200B and S200D buttons paired to a hub | The sensors paired to it show up as devices of their own. Its alarm and pairing stay blocked |
-| <img src="assets/devices/contact.svg" width="36" alt="Door and window sensor"> | Door and window sensors | T110 |  | Open or closed, low-battery flag |
-| <img src="assets/devices/climate.svg" width="36" alt="Temperature and humidity sensor"> | Temperature and humidity sensors | T310 | T315 (the one with a display) | Temperature, humidity, low-battery flag |
-| <img src="assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
-| <img src="assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
-| <img src="assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Read-only, no video |
-| <img src="assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. Read-only |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/light.svg" width="36" alt="Light bulb"> | Color bulbs | L430C | L430P, L530B, L530E, L530EA, L535E | State, brightness, white temperature and color |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/plug.svg" width="36" alt="Smart plug"> | Smart plugs | P115 | P110, P110M | State, plus power, voltage and current readings |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/hub.svg" width="36" alt="Hub"> | Hubs | H200 | H100, and S200B and S200D buttons paired to a hub | The sensors paired to it show up as devices of their own. Its alarm and pairing stay blocked |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/contact.svg" width="36" alt="Door and window sensor"> | Door and window sensors | T110 |  | Open or closed, low-battery flag |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/climate.svg" width="36" alt="Temperature and humidity sensor"> | Temperature and humidity sensors | T310 | T315 (the one with a display) | Temperature, humidity, low-battery flag |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Read-only, no video |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. Read-only |
 
 The C610 and the C465 are not on python-kasa's list yet, but both connected fine. The C465 needs the small
 certificate fix in `compat.py`. The full upstream list is in
@@ -245,14 +245,14 @@ docs/protocols.md  how Tapo devices talk on the local network
 assets/          logo, device icons and social preview
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, [docs/protocols.md](docs/protocols.md) for the protocol notes and
-[SECURITY.md](SECURITY.md) to report a vulnerability.
+See [CONTRIBUTING.md](https://github.com/signerless/tolpo/blob/main/CONTRIBUTING.md) for the ground rules, [docs/protocols.md](https://github.com/signerless/tolpo/blob/main/docs/protocols.md) for the protocol notes and
+[SECURITY.md](https://github.com/signerless/tolpo/blob/main/SECURITY.md) to report a vulnerability.
 
 ## Background
 
 The protocols behind Tapo devices are not documented by the vendor. Part of this project is independent
 analysis of the official Tapo app and of real devices, done so that software can interoperate with hardware
-its owners already have. The result is written down in [docs/protocols.md](docs/protocols.md): which
+its owners already have. The result is written down in [docs/protocols.md](https://github.com/signerless/tolpo/blob/main/docs/protocols.md): which
 transport each model uses, how discovery works, what the newer TPAP protocol looks like, and what we could not
 establish. The notes are in our own words. They contain no vendor code, keys or credentials, and tolpo itself
 only ever signs in with your own Tapo account.
@@ -269,8 +269,10 @@ been tested.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](https://github.com/signerless/tolpo/blob/main/LICENSE).
 
 This project is not affiliated with or endorsed by TP-Link. Tapo is a trademark of TP-Link. All device
 communication goes through the open source
 [python-kasa](https://github.com/python-kasa/python-kasa) library.
+
+<!-- mcp-name: io.github.signerless/tolpo -->

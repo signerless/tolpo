@@ -29,3 +29,27 @@ jobs:
         run: uv pip install --python .venv/bin/python -e ".[dev]"
       - name: Run the tests
         run: .venv/bin/python -m pytest -q
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+          cache-suffix: package
+      - name: The versions in the repo agree
+        run: python3 scripts/check_release.py
+      - name: Build the package
+        run: uv build
+      - name: The package page will render on PyPI
+        run: uvx twine check --strict dist/*
+      - name: server.json follows the MCP registry schema
+        run: uvx check-jsonschema --schemafile https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json server.json
+      - name: The wheel installs and runs in a clean environment
+        run: |
+          uv venv --python 3.13 /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl
+          /tmp/clean/bin/tolpo --help

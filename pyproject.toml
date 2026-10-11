@@ -1,10 +1,34 @@
 [project]
 name = "tolpo"
-version = "0.1.0"
-description = "Local-first HTTP API that lets AI agents read and control smart-home devices"
+dynamic = ["version"]
+description = "Local-first MCP server and HTTP API that let AI agents read and control TP-Link Tapo smart-home devices"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "signerless" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "tapo",
+    "tp-link",
+    "smart-home",
+    "home-automation",
+    "ai-agents",
+    "local-first",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Home Automation",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+]
 requires-python = ">=3.11"
 dependencies = [
     "python-kasa>=0.11",
@@ -14,7 +38,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/signerless/tolpo"
+Documentation = "https://github.com/signerless/tolpo#readme"
 Repository = "https://github.com/signerless/tolpo"
+Issues = "https://github.com/signerless/tolpo/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
@@ -25,6 +52,9 @@ tolpo = "tolpo.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/tolpo/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tolpo"]

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.signerless/tolpo",
+  "title": "tolpo",
+  "description": "Local-first control of TP-Link Tapo smart-home devices for AI agents",
+  "repository": {
+    "url": "https://github.com/signerless/tolpo",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "tolpo",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "TAPO_EMAIL",
+          "description": "Email of the Tapo account the devices belong to",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "TAPO_PASSWORD",
+          "description": "Password of that Tapo account",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
