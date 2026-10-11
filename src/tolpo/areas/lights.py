@@ -5,6 +5,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from kasa import Module
+from kasa.exceptions import DeviceError, SmartErrorCode
 from pydantic import Field, StrictBool, StrictInt
 
 from .. import policy
@@ -23,6 +24,8 @@ for _family in ("schedule", "countdown", "antitheft"):
     # UNVERIFIED: countdown/antitheft removal parameter shape follows the decoded schedule removal bean.
     METHODS.append(policy.method(f"remove_{_family}_rules", Tier.SETTING, ["light"],
                                  f"Delete lighting {_family} rules."))
+# UNVERIFIED: get_auto_light_info and set_auto_light_info come from the app's AutoLightBean. No real device has
+# answered them yet: the L430C reports the auto_light component but returns an unknown-method error.
 METHODS.extend([
     policy.method("get_auto_light_info", Tier.READ, ["light"], "Read the Auto-White mode."),
     policy.method("set_auto_light_info", Tier.SETTING, ["light"], "Change automatic white lighting."),
@@ -122,6 +125,22 @@ def light_entry(registry, ref):
     return entry
 
 
+def missing_method(exc):
+    """True when the device answered that it does not know the method, as the L430C does for get_auto_light_info."""
+    cause = exc.__cause__
+    return isinstance(cause, DeviceError) and cause.error_code is SmartErrorCode.UNKNOWN_METHOD_ERROR
+
+
+async def ask(caller, entry, method, params=None):
+    """Send one method. A model that lacks the method gets a clean refusal, not the library's error text."""
+    try:
+        return await caller.call(entry, method, params)
+    except DeviceUnavailable as exc:
+        if missing_method(exc):
+            raise Unsupported(f"{clean(entry.slug)} does not support {method}") from None
+        raise
+
+
 async def refreshed(registry, entry):
     await registry.refresh(entry, force=True)
     if not entry.online:
@@ -129,7 +148,7 @@ async def refreshed(registry, entry):
 
 
 async def write(registry, caller, entry, method, params):
-    result = await caller.call(entry, method, params)
+    result = await ask(caller, entry, method, params)
     if result is False or (isinstance(result, dict) and result.get("error_code", 0) != 0):
         raise DeviceUnavailable(f"{clean(entry.slug)} refused {method}")
     await refreshed(registry, entry)
@@ -138,7 +157,7 @@ async def write(registry, caller, entry, method, params):
 
 async def defaults_read(registry, caller, ref):
     entry = light_entry(registry, ref)
-    info = await caller.call(entry, "get_device_info")
+    info = await ask(caller, entry, "get_device_info")
     raw = info.get("default_states") if isinstance(info, dict) else None
     if not isinstance(raw, dict):
         raise Unsupported(f"{clean(entry.slug)} did not report power-on defaults")
@@ -293,7 +312,7 @@ async def rules_page(registry, caller, ref, kind, start_index=0):
     params = {"start_index": start_index}
     if kind != "schedule" and start_index:
         raise BadRequest("only schedules have a start_index")
-    result = await caller.call(entry, f"get_{kind}_rules", params)
+    result = await ask(caller, entry, f"get_{kind}_rules", params)
     if not isinstance(result, dict):
         raise DeviceUnavailable(f"{clean(entry.slug)} returned an invalid rule list")
     return entry, result
@@ -311,7 +330,7 @@ async def change_rule(registry, caller, ref, kind, rule, *, editing=False):
     params = rule_object(kind, rule, editing=editing)
     entry = light_entry(registry, ref)
     method = f"{'edit' if editing else 'add'}_{kind}_rule"
-    result = await caller.call(entry, method, params)
+    result = await ask(caller, entry, method, params)
     if result is False or (isinstance(result, dict) and result.get("error_code", 0) != 0):
         raise DeviceUnavailable(f"{clean(entry.slug)} refused {method}")
     if isinstance(result, dict) and result.get("conflict_id"):
@@ -356,7 +375,7 @@ async def enable_rule(registry, caller, ref, kind, rule_id, enable):
 
 async def next_event(registry, caller, ref):
     entry = light_entry(registry, ref)
-    result = await caller.call(entry, "get_next_event")
+    result = await ask(caller, entry, "get_next_event")
     out = {"device": clean(entry.slug)}
     if compact(result):
         out["next_event"] = compact(result)
@@ -408,17 +427,22 @@ async def set_option(registry, ref, feature_id, value):
     return {"device": clean(entry.slug), "changed": {feature_id: value}}
 
 
-async def set_effect(registry, ref, effect, brightness=50, transition=1000):
-    integer(brightness, "brightness", 1, 100)
-    integer(transition, "transition milliseconds", 0, 60000)
+async def set_effect(registry, ref, effect, brightness=None, transition=None):
+    # None keeps python-kasa's behavior: the light's current brightness and the effect's own transition.
+    if brightness is not None:
+        integer(brightness, "brightness", 1, 100)
+    if transition is not None:
+        integer(transition, "transition milliseconds", 0, 60000)
     entry = light_entry(registry, ref)
     registry._require_write(entry, "light_effect")
     module = effect_module(registry, entry)
     choice(effect, "effect", module.effect_list)
     await registry.guarded(entry, lambda: module.set_effect(effect, brightness=brightness, transition=transition))
     await refreshed(registry, entry)
+    on = effect != module.LIGHT_EFFECTS_OFF
     return {"device": clean(entry.slug), "changed": {"light_effect": clean(effect),
-            **({"brightness": brightness} if effect != module.LIGHT_EFFECTS_OFF else {})}}
+            **({"brightness": brightness} if on and brightness is not None else {}),
+            **({"transition": transition} if on and transition is not None else {})}}
 
 
 COLOR_FIELDS = {"sequence", "display_colors", "init_states", "backgrounds"}
@@ -504,7 +528,7 @@ async def custom_effect(registry, ref, effect):
 
 async def get_auto_white(registry, caller, ref):
     entry = light_entry(registry, ref)
-    result = await caller.call(entry, "get_auto_light_info")
+    result = await ask(caller, entry, "get_auto_light_info")
     if not isinstance(result, dict):
         raise DeviceUnavailable(f"{clean(entry.slug)} returned invalid Auto-White information")
     auto = compact({k: v for k, v in result.items() if k in {"enable", "mode"}})
@@ -518,7 +542,14 @@ async def set_auto_white(registry, caller, ref, enable, mode=None):
     elif enable:
         raise BadRequest("enabling Auto-White requires a mode")
     entry = light_entry(registry, ref)
+    # Read first: the L430C lists an auto_light component but answers get_auto_light_info with an
+    # unknown-method error. A model that cannot read Auto-White is refused before any write is sent.
     params = {"enable": enable, **({"mode": mode} if mode is not None else {})}
+    if caller.plan(entry, "set_auto_light_info")["allowed"]:
+        current = await ask(caller, entry, "get_auto_light_info")
+        if not isinstance(current, dict):
+            raise DeviceUnavailable(f"{clean(entry.slug)} returned invalid Auto-White information")
+    # A blocked write goes straight to the caller, which refuses it without touching the device.
     return await write(registry, caller, entry, "set_auto_light_info", params)
 
 
@@ -526,7 +557,7 @@ async def presets_page(registry, caller, ref, start_index):
     integer(start_index, "start_index", 0, 10000)
     entry = light_entry(registry, ref)
     # UNVERIFIED: ordinary child forwarding must be checked on a ceiling light's ring/downlight.
-    result = await caller.call(entry, "get_preset_rules", {"start_index": start_index})
+    result = await ask(caller, entry, "get_preset_rules", {"start_index": start_index})
     if not isinstance(result, dict):
         raise DeviceUnavailable(f"{clean(entry.slug)} returned an invalid preset list")
     return entry, result
@@ -583,10 +614,10 @@ async def edit_preset(registry, caller, ref, index, state):
 
 async def get_segment_effect(registry, caller, ref):
     entry = light_entry(registry, ref)
-    info = await caller.call(entry, "get_device_info")
+    info = await ask(caller, entry, "get_device_info")
     result = info.get("segment_effect") if isinstance(info, dict) else None
     if not isinstance(result, dict):
-        result = await caller.call(entry, "get_segment_effect_rule")
+        result = await ask(caller, entry, "get_segment_effect_rule")
     if not isinstance(result, dict):
         raise DeviceUnavailable(f"{clean(entry.slug)} returned invalid segment effect information")
     # states and display_colors are deliberately omitted: their V2 encodings are undecoded.
@@ -663,8 +694,8 @@ def tools(ctx):
     @ctx.tool(title="Apply light effect", tier=Tier.CONTROL)
     async def light_set_effect(device: DeviceRef,
                                effect: Annotated[str, Field(description="Exact built-in effect name from light_features, including Off.")],
-                               brightness: Annotated[int, Field(strict=True, description="Effect brightness from 1 to 100.")] = 50,
-                               transition: Annotated[int, Field(strict=True, description="Transition milliseconds from 0 to 60000.")] = 1000) -> dict[str, Any]:
+                               brightness: Annotated[int | None, Field(strict=True, description="Effect brightness from 1 to 100. Leave out to keep the current brightness.")] = None,
+                               transition: Annotated[int | None, Field(strict=True, description="Transition milliseconds from 0 to 60000. Leave out to keep the effect's own timing.")] = None) -> dict[str, Any]:
         """Apply a built-in strip effect or bulb Party or Relax. The light_effect write permission still applies."""
         await ctx.ready_for([device])
         with ctx.translated():

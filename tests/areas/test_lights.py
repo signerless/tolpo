@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from kasa import Feature, Module
-from kasa.exceptions import DeviceError
+from kasa.exceptions import DeviceError, SmartErrorCode
 
 from tolpo.areas import lights
 from tolpo.registry import BadRequest, DeviceUnavailable, Forbidden, NotFound, Unsupported
@@ -285,8 +285,22 @@ async def test_builtin_effects_use_kasa_module_and_opt_in(make_house, name):
     reg, caller, devices = make_house(allow_write=frozenset({"light_effect"}))
     module = add_lighting_features(devices["office1"])
     result = await lights.set_effect(reg, "office-1", name)
-    module.set_effect.assert_awaited_once_with(name, brightness=50, transition=1000)
-    assert result["changed"]["light_effect"] == name
+    module.set_effect.assert_awaited_once_with(name, brightness=None, transition=None)
+    assert result["changed"] == {"light_effect": name}
+
+
+async def test_builtin_effect_keeps_brightness_unless_asked(make_house):
+    reg, caller, devices = make_house(allow_write=frozenset({"light_effect"}))
+    module = add_lighting_features(devices["office1"])
+    result = await lights.set_effect(reg, "office-1", "Aurora", 30, 500)
+    module.set_effect.assert_awaited_once_with("Aurora", brightness=30, transition=500)
+    assert result["changed"] == {"light_effect": "Aurora", "brightness": 30, "transition": 500}
+    for brightness, transition in ((0, None), (101, None), (True, None), (None, -1), (None, 60001), (None, 1.5)):
+        with pytest.raises(BadRequest):
+            await lights.set_effect(reg, "office-1", "Aurora", brightness, transition)
+    with pytest.raises(BadRequest):
+        await lights.set_effect(reg, "office-1", "Not an effect")
+    assert module.set_effect.await_count == 1
 
 
 PAINT = {"id": "my-paint", "name": "My paint", "type": "static", "segments": [0, 1],
@@ -527,9 +541,43 @@ async def test_real_l430c_read_shapes_and_supported_features(make_house):
             f"smooth_transition_{kind}", Feature.Type.Number, value=1, hi=60)
     result = await lights.get_features(reg, "office-1")
     assert set(result["features"]) == {"smooth_transition_on", "smooth_transition_off"}
-    caller.respond("get_auto_light_info", DeviceError("UNKNOWN_METHOD_ERROR", error_code=None))
-    with pytest.raises(DeviceUnavailable, match="office-1.*reported an error"):
+    unknown = DeviceError("Error querying device: 192.0.2.1: UNKNOWN_METHOD_ERROR(-1002)",
+                          error_code=SmartErrorCode.UNKNOWN_METHOD_ERROR)
+    caller.respond("get_auto_light_info", unknown)
+    with pytest.raises(Unsupported, match="office-1 does not support get_auto_light_info") as failure:
         await lights.get_auto_white(reg, caller, "office-1")
+    assert "192.0.2.1" not in str(failure.value)
+    # The L430C must be refused before set_auto_light_info is ever sent.
+    with pytest.raises(Unsupported):
+        await lights.set_auto_white(reg, caller, "office-1", True, "circadian")
+    assert "set_auto_light_info" not in caller.methods_sent()
+
+
+async def test_models_without_a_method_are_refused_without_a_write(make_house):
+    unknown = DeviceError("UNKNOWN_METHOD_ERROR", error_code=SmartErrorCode.UNKNOWN_METHOD_ERROR)
+    reg, caller, devices = make_house(tier=2, allow_write=frozenset({"light_effect"}), responses={
+        "get_preset_rules": unknown, "get_device_info": {"device_on": True}, "get_schedule_rules": unknown,
+        "add_countdown_rule": unknown})
+    with pytest.raises(Unsupported):
+        await lights.edit_preset(reg, caller, "office-1", 0, {"brightness": 40})
+    with pytest.raises(Unsupported):
+        await lights.get_presets(reg, caller, "office-1")
+    with pytest.raises(Unsupported):
+        await lights.set_defaults(reg, caller, "office-1", {"re_power_type": "always_on"})
+    with pytest.raises(Unsupported):
+        await lights.list_rules(reg, caller, "office-1", "schedule")
+    with pytest.raises(Unsupported, match="add_countdown_rule"):
+        await lights.change_rule(reg, caller, "office-1", "countdown", COUNTDOWN)
+    # No lighting_effect module, as on the L430C: nothing reaches the device.
+    with pytest.raises(NotFound):
+        await lights.set_effect(reg, "office-1", "Party")
+    with pytest.raises(NotFound):
+        await lights.custom_effect(reg, "office-1", PAINT)
+    assert [m for m in caller.methods_sent() if not m.startswith("get_")] == ["add_countdown_rule"]
+    # Other device errors stay errors that name the device.
+    caller.respond("get_preset_rules", DeviceError("x", error_code=SmartErrorCode.PARAMS_ERROR))
+    with pytest.raises(DeviceUnavailable, match="office-1"):
+        await lights.get_presets(reg, caller, "office-1")
 
 
 async def test_rule_conflicts_and_contradictory_actions(make_house):
