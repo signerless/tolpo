@@ -334,6 +334,7 @@ async def test_schedule_reads_compact_and_conflict_is_visible(house):
     out = await v.schedules(reg, caller, "floor-robot")
     assert out["rules"][0]["id"] == "s1 hello" and out["rules"][0]["clean_attr"]["room_list"] == [1]
     saved = await v.set_schedule(reg, caller, "floor-robot", 3, 480, 7, [1])
+    assert saved["id"] == "floor-robot" and saved["rule_id"] == "s2"
     assert saved["conflict_id"] == "s1" and "conflict" in saved["note"]
     assert "changed" not in saved and saved["requested"] == SCHEDULE and "UNVERIFIED" in saved["note"]
     assert await v.dnd(reg, caller, "floor-robot") == {"id": "floor-robot", "do_not_disturb": True, "s_min": 1320, "e_min": 420, "display_notification": 31}
@@ -453,3 +454,12 @@ def test_every_tool_and_method_is_exercised_and_documented(house):
     doc = (Path(__file__).parents[2] / "docs/areas/vacuum.md").read_text()
     assert all(f"- `{name}`:" in doc for name in names)
     assert "UNVERIFIED" in doc and "fakes" in doc
+
+
+@pytest.mark.anyio
+async def test_schedule_reply_cannot_redirect_the_robot_id(house):
+    reg, caller, _ = house(responses={"addScheduleRule": {"id": "desk-lamp"}, "editScheduleRule": {"id": "other\nrobot"}})
+    added = await v.set_schedule(reg, caller, "floor-robot", 3, 480, 7, [1])
+    assert added["id"] == "floor-robot" and added["rule_id"] == "desk-lamp"
+    edited = await v.set_schedule(reg, caller, "floor-robot", 3, 480, 7, [1], True, "s1")
+    assert edited["id"] == "floor-robot" and edited["rule_id"] == "other robot"

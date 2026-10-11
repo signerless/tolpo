@@ -196,7 +196,13 @@ async def write(registry, caller, device, method, params, confirm=None, note=Non
     if not entry.online:
         out["refresh_error"] = f"{clean(entry.slug)}: state refresh failed ({clean(entry.error or 'unreachable')})"
     if method in ("addScheduleRule", "editScheduleRule"):
-        out.update(project(result, texts=("id", "conflict_id")))
+        # The device's schedule id goes under its own key. It must never replace the robot id, or an agent could
+        # address its next command to whatever text the device returned.
+        reply = project(result, texts=("id", "conflict_id"))
+        if "id" in reply:
+            out["rule_id"] = reply["id"]
+        if "conflict_id" in reply:
+            out["conflict_id"] = reply["conflict_id"]
         if out.get("conflict_id"):
             out["requested"] = out.pop("changed")
             out["note"] = (note + " " if note else "") + "Device reported a schedule conflict. Check schedules before assuming it was saved."
