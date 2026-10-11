@@ -21,11 +21,20 @@ def _md5(text: str) -> str:
 class FakeCamera:
     def __init__(self, password: str, chunks: list[bytes], *, encrypt_type: str = "3", exchange_user: str = "admin",
                  send_key_exchange: bool = True, extra_parts: list[tuple[str, bytes]] = (), part_size: int | None = None,
-                 answer: bytes | None = None, silent: bool = False, stream_password: str | None = None, lie_from: int = 0):
+                 answer: bytes | None = None, silent: bool = False, stream_password: str | None = None, lie_from: int = 0,
+                 hang_up: bool = False, script=None, notices: list[dict] = ()):
         self.chunks, self.extra_parts, self.part_size = chunks, list(extra_parts), part_size
         self.encrypt_type, self.exchange_user, self.send_key_exchange = encrypt_type, exchange_user, send_key_exchange
         self.lie_from = lie_from  # index of the first video part whose size is misreported
         self.answer, self.silent = answer, silent  # a fixed reply instead of the real conversation; or no reply at all
+        self.hang_up = hang_up  # close the connection right after the fixed reply
+        # script(camera, request, send) replaces the live stream after the login; send(mime, body, encrypted=..., headers=...)
+        self.script = script
+        self.notices = list(notices)  # notifications sent after the response, before the video
+        self.heads: list[str] = []  # the HTTP heads the client sent, as text
+        self.received: list[tuple[dict, dict | None]] = []  # parts the client sent after its request: (headers, JSON)
+        self.acked = 0  # the highest X-Data-Received the client sent
+        self._acked = asyncio.Condition()
         digest = hashlib.sha256 if encrypt_type == "3" else hashlib.md5
         self.hashed = digest(password.encode()).hexdigest().upper()
         # normally the stream is locked with the same secret the login used; a test can make them differ
@@ -54,10 +63,11 @@ class FakeCamera:
                 await reader.read()
                 return
             if self.answer is not None:
-                await reader.readuntil(b"\r\n\r\n")
+                self.heads.append((await reader.readuntil(b"\r\n\r\n")).decode())
                 writer.write(self.answer)
                 await writer.drain()
-                await reader.read()
+                if not self.hang_up:
+                    await reader.read()
                 return
             nonce, opaque = os.urandom(8).hex(), os.urandom(8).hex()
             challenge = (
@@ -65,10 +75,12 @@ class FakeCamera:
                 f'qop="auth",nonce="{nonce}",opaque="{opaque}"'
             )
             head = (await reader.readuntil(b"\r\n\r\n")).decode()
+            self.heads.append(head)
             if "authorization:" not in head.lower():
                 writer.write(f"HTTP/1.0 401 Unauthorized\r\nWWW-Authenticate: {challenge}\r\nContent-Length: 0\r\n\r\n".encode())
                 await writer.drain()
                 head = (await reader.readuntil(b"\r\n\r\n")).decode()
+                self.heads.append(head)
             if not self._login_ok(head, nonce, opaque):
                 self.failed_logins += 1
                 writer.write(b"HTTP/1.0 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
@@ -87,33 +99,76 @@ class FakeCamera:
             key = hashlib.md5(f"{stream_nonce}:{self.stream_hashed}".encode()).digest()
             iv = hashlib.md5(f"{self.exchange_user}:{stream_nonce}".encode()).digest()
 
-            def part(mime: str, body: bytes, *, encrypted: bool, seq: int, claimed_size: int | None = None) -> bytes:
+            def part(mime: str, body: bytes, *, encrypted: bool, seq: int | None, claimed_size: int | None = None,
+                     headers: dict | None = None) -> bytes:
                 if encrypted:
                     pad = padding.PKCS7(128).padder()
                     enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
                     body = enc.update(pad.update(body) + pad.finalize()) + enc.finalize()
+                extra = {"X-Session-Id": "4242", **({"X-Data-Sequence": seq} if seq is not None else {}), **(headers or {})}
                 return (
                     b"----device-stream-boundary--\r\n"
                     + f"Content-Type: {mime}\r\nContent-Length: {claimed_size if claimed_size is not None else len(body)}\r\n"
-                      f"X-If-Encrypt: {int(encrypted)}\r\n"
-                      f"X-Session-Id: 4242\r\nX-Data-Sequence: {seq}\r\n\r\n".encode()
+                      f"X-If-Encrypt: {int(encrypted)}\r\n".encode()
+                    + "".join(f"{k}: {v}\r\n" for k, v in extra.items()).encode() + b"\r\n"
                     + body + b"\r\n"
                 )
 
-            answer = json.dumps({"type": "response", "seq": 1, "params": {"error_code": 0, "session_id": "4242"}}).encode()
-            writer.write(part("application/json", answer, encrypted=False, seq=1))
-            for mime, body in self.extra_parts:
-                writer.write(part(mime, body, encrypted=True, seq=2))
-            for seq, chunk in enumerate(self.chunks, start=3):
-                lie = self.part_size if seq - 3 >= self.lie_from else None
-                writer.write(part("video/mp2t", chunk, encrypted=True, seq=seq, claimed_size=lie))
-                await writer.drain()
-            await reader.read()  # a live camera keeps talking; here the client leaves first
+            listening = asyncio.create_task(self._listen(reader))
+            if self.script is not None:
+                async def send(mime, body, *, encrypted=True, seq=None, headers=None):
+                    writer.write(part(mime, body, encrypted=encrypted, seq=seq, headers=headers))
+                    await writer.drain()
+
+                await self.script(self, self.requests[-1], send)
+            else:
+                answer = json.dumps({"type": "response", "seq": 1, "params": {"error_code": 0, "session_id": "4242"}}).encode()
+                writer.write(part("application/json", answer, encrypted=False, seq=1))
+                for notice in self.notices:
+                    writer.write(part("application/json", json.dumps({"type": "notification", "params": notice}).encode(), encrypted=False, seq=None))
+                for mime, body in self.extra_parts:
+                    writer.write(part(mime, body, encrypted=True, seq=2))
+                for seq, chunk in enumerate(self.chunks, start=3):
+                    lie = self.part_size if seq - 3 >= self.lie_from else None
+                    writer.write(part("video/mp2t", chunk, encrypted=True, seq=seq, claimed_size=lie))
+                    await writer.drain()
+            await listening  # a live camera keeps talking; here the client leaves first
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
             self.disconnected.set()
             writer.close()
+
+    async def _listen(self, reader: asyncio.StreamReader) -> None:
+        """Read what the client sends after its request (acknowledgements, a stop) until it hangs up."""
+        try:
+            while True:
+                headers, body = await self._read_part(reader)
+                try:
+                    message = json.loads(body)
+                except ValueError:
+                    message = None
+                self.received.append((headers, message))
+                if "x-data-received" in headers:
+                    async with self._acked:
+                        self.acked = max(self.acked, int(headers["x-data-received"]))
+                        self._acked.notify_all()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+
+    async def wait_for_ack(self, seq: int, timeout: float = 5.0) -> bool:
+        """Wait until the client acknowledged part `seq` or later. False when it never does."""
+        async with self._acked:
+            try:
+                await asyncio.wait_for(self._acked.wait_for(lambda: self.acked >= seq), timeout)
+            except TimeoutError:
+                return False
+        return True
+
+    def stops(self) -> list[dict]:
+        """The stop requests the client sent, with the session they named."""
+        return [dict(m["params"], session=h.get("x-session-id")) for h, m in self.received
+                if m and m.get("type") == "request" and m.get("params", {}).get("method") == "do" and "stop" in m["params"]]
 
     def _login_ok(self, head: str, nonce: str, opaque: str) -> bool:
         auth = re.search(r"authorization:\s*Digest\s+(.*)", head, re.I)
@@ -125,12 +180,18 @@ class FakeCamera:
         expected = _md5(f"{ha1}:{nonce}:{fields.get('nc')}:{fields.get('cnonce')}:auth:{ha2}")
         return fields.get("username") == "admin" and fields.get("nonce") == nonce and fields.get("response") == expected
 
+    async def _read_request(self, reader: asyncio.StreamReader) -> dict:
+        headers, body = await self._read_part(reader)
+        self.request_headers = headers
+        return json.loads(body)
+
     @staticmethod
-    async def _read_request(reader: asyncio.StreamReader) -> dict:
+    async def _read_part(reader: asyncio.StreamReader) -> tuple[dict, bytes]:
         await reader.readuntil(b"----client-stream-boundary--\r\n")
-        headers = (await reader.readuntil(b"\r\n\r\n")).decode().lower()
-        size = int(re.search(r"content-length:\s*(\d+)", headers).group(1))
-        return json.loads(await reader.readexactly(size))
+        text = (await reader.readuntil(b"\r\n\r\n")).decode()
+        headers = {k.strip().lower(): v.strip() for k, _, v in (line.partition(":") for line in text.strip().split("\r\n")) if v}
+        size = int(headers["content-length"])
+        return headers, await reader.readexactly(size)
 
 
 def _crc32_mpeg(data: bytes) -> int:

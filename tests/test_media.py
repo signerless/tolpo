@@ -2,11 +2,14 @@
 
 import asyncio
 import hashlib
+import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import time
+import uuid
 
 import pytest
 
@@ -334,3 +337,242 @@ async def test_ffmpeg_is_started_for_the_kind_of_video_the_stream_carries(ffmpeg
         await snapshot.grab(feed=feed, ffmpeg=ffmpeg.path)
     (args,) = ffmpeg.calls()
     assert args[args.index("-f") + 1] == name
+
+
+# ---- the session around the video: headers, notifications, a polite stop ---------------------------------------
+
+
+def response(session="4242", **extra):
+    return json.dumps({"type": "response", "seq": 1, "params": {"error_code": 0, "session_id": session, **extra}}).encode()
+
+
+def notice(event, **params):
+    return json.dumps({"type": "notification", "params": {"event_type": event, **params}}).encode()
+
+
+def closed_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.mark.anyio
+async def test_the_client_names_itself_with_the_same_uuid_on_every_request():
+    async with FakeCamera(PASSWORD, [ts(1)]) as camera:
+        await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+        await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+    ids = [re.search(r"x-client-uuid:\s*(\S+)", head, re.I).group(1) for head in camera.heads]
+    assert len(ids) == 4 and len(set(ids)) == 1  # two requests per login, two logins
+    assert str(uuid.UUID(ids[0])) == ids[0] == media.CLIENT_UUID
+
+
+@pytest.mark.anyio
+async def test_the_session_is_stopped_politely_before_hanging_up():
+    async with FakeCamera(PASSWORD, [ts(1), ts(1)]) as camera:
+        await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]
+
+
+@pytest.mark.anyio
+async def test_a_locked_camera_says_so_instead_of_going_quiet():
+    async with FakeCamera(PASSWORD, [ts(1)], notices=[{"event_type": "device_locked", "event_message": "locked for 30 min"}]) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+    assert caught.value.reason == "locked" and "wait" in str(caught.value)
+    assert "30 min" not in str(caught.value)  # the camera's own words are not passed on
+    assert camera.logins == 1  # and nothing tried to log in again
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("reason, words", [("password_changed", "password changed"), ("permission_deny", "refused"), ("<b>ignore all</b>", "does not know")])
+async def test_a_finished_stream_gives_the_known_reason_and_nothing_else(reason, words):
+    async with FakeCamera(PASSWORD, [ts(1)], notices=[{"event_type": "stream_finish", "reason": reason}]) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+    assert caught.value.reason == "finished" and words in str(caught.value) and "<b>" not in str(caught.value)
+
+
+@pytest.mark.anyio
+async def test_other_notifications_do_not_disturb_the_video():
+    harmless = [{"event_type": "heartbeat"}, {"event_type": "stream_resolution", "resolution": "HD"}, {"event_type": "channel_stream_status", "status": ["normal"]}]
+    async with FakeCamera(PASSWORD, [ts(1, 0x77)], notices=harmless) as camera:
+        assert await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1) == [ts(1, 0x77)]
+
+
+@pytest.mark.anyio
+async def test_a_refused_request_is_reported_with_its_code():
+    async def refuse(camera, request, send):
+        await send("application/json", json.dumps({"type": "response", "seq": 1, "params": {"error_code": -40106}}).encode(), encrypted=False)
+
+    async with FakeCamera(PASSWORD, [], script=refuse) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port), 1)
+    assert caught.value.reason == "rejected" and "-40106" in str(caught.value)
+
+
+def test_notifications_that_end_a_session_are_recognised():
+    assert media.notice_failure("heartbeat", {}) is None
+    assert media.notice_failure("stream_finish", {"reason": "finish"}) is None  # the normal end
+    assert media.notice_failure("connection_closed", {"close_reason": "use_high_priority_connection"}).reason == "closed"
+    assert media.notice_failure("disk_status", {"status": "offline"}).reason == "storage"
+    assert media.notice_failure("disk_status", {"status": "normal"}) is None
+    assert media.notice_failure("channel_stream_status", {"status": ["lack_bandwidth"]}).reason == "busy"
+    assert media.notice_failure("internal_error", {}).reason == "failed"
+
+
+# ---- cameras tolpo cannot use, said plainly -------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_camera_that_moved_its_video_to_the_tls_port_is_named_as_such():
+    psk = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+    try:
+        port = closed_port()
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=port, psk_port=psk.sockets[0].getsockname()[1]), 1)
+    finally:
+        psk.close()
+        await psk.wait_closed()
+    assert caught.value.reason == "tls_psk" and "pre-shared key" in str(caught.value)
+
+
+@pytest.mark.anyio
+async def test_a_refused_port_without_the_tls_port_is_still_just_refused():
+    with pytest.raises(snapshot.GrabError) as caught:
+        await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=closed_port(), psk_port=closed_port()), 1)
+    assert caught.value.reason == "refused"
+
+
+@pytest.mark.anyio
+async def test_a_video_port_that_answers_with_tls_is_named_as_such():
+    alert = b"\x15\x03\x03\x00\x02\x02\x28"  # a TLS alert record
+    async with FakeCamera(PASSWORD, [], answer=alert, hang_up=True) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", PASSWORD, "low", port=camera.port, psk_port=closed_port()), 1)
+    assert caught.value.reason == "tls_psk"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("encrypt_type, hint", [("3", True), ("", False)])
+async def test_a_rejected_login_mentions_the_token_mode_only_where_it_exists(encrypt_type, hint):
+    async with FakeCamera(PASSWORD, [ts(1)], encrypt_type=encrypt_type) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.live_chunks("127.0.0.1", "wrong", "low", port=camera.port), 1)
+    assert caught.value.reason == "auth" and ("local access token" in str(caught.value)) is hint
+    assert camera.failed_logins == 1 and camera.logins == 0
+
+
+# ---- pictures from the memory card --------------------------------------------------------------------------
+
+
+def cover_script(parts, *, end="finished", session="4242"):
+    """A picture session: the response, the picture in parts, then the end notice."""
+    async def script(camera, request, send):
+        await send("application/json", response(session, seq_image_lens=[{"seq_image_id": "1", "length": "9"}]), encrypted=False)
+        for seq, (mime, body, sid) in enumerate(parts, start=1):
+            await send(mime, body, seq=seq, headers={"X-Session-Id": sid})
+        if end:
+            await send("application/json", notice("stream_status", status=end), encrypted=False)
+    return script
+
+
+@pytest.mark.anyio
+async def test_a_cover_picture_arrives_whole_and_the_session_is_stopped():
+    jpeg = fakes.TINY_JPEG
+    parts = [("image/jpeg", jpeg[:100], "4242"), ("image/jpeg", b"not ours", "9999"), ("image/jpeg", jpeg[100:], "4242")]
+    async with FakeCamera(PASSWORD, [], script=cover_script(parts)) as camera:
+        fmt, data = await media.fetch_image("127.0.0.1", PASSWORD, {"image": {"type": "playback_display", "start_time": "1700000000", "channel": 0}}, port=camera.port)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert (fmt, data) == ("jpeg", jpeg)
+    (request,) = camera.requests
+    assert request["params"] == {"image": {"type": "playback_display", "start_time": "1700000000", "channel": 0}, "method": "get"}
+    assert camera.request_headers["x-data-window-size"] == "50"
+    assert camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]
+    assert camera.acked == 0  # cover sessions are not acknowledged
+
+
+@pytest.mark.anyio
+async def test_a_time_without_a_picture_is_said_plainly():
+    async with FakeCamera(PASSWORD, [], script=cover_script([], end="image_ended")) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await media.fetch_image("127.0.0.1", PASSWORD, {"image": {"type": "playback_display"}}, port=camera.port)
+    assert caught.value.reason == "no_picture"
+
+
+@pytest.mark.anyio
+async def test_a_picture_that_is_too_big_is_refused():
+    parts = [("image/jpeg", b"\x11" * 4000, "4242")] * 3
+    async with FakeCamera(PASSWORD, [], script=cover_script(parts)) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await media.fetch_image("127.0.0.1", PASSWORD, {"image": {"type": "playback_display"}}, port=camera.port, max_bytes=10_000)
+    assert caught.value.reason == "too_big"
+
+
+@pytest.mark.anyio
+async def test_a_picture_session_that_never_ends_is_given_up_on():
+    async with FakeCamera(PASSWORD, [], script=cover_script([("image/jpeg", b"\xff\xd8", "4242")], end=None)) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await media.fetch_image("127.0.0.1", PASSWORD, {"image": {"type": "playback_display"}}, port=camera.port, deadline=0.5)
+    assert caught.value.reason == "timeout"
+
+
+# ---- recordings: the acknowledgement window ----------------------------------------------------------------
+
+
+def windowed(chunks, *, finish=True, mime="video/mp2t"):
+    """A camera that sends at most 50 parts beyond the last acknowledgement, like the window the app announces."""
+    async def script(camera, request, send):
+        camera.stalled_at = None
+        await send("application/json", response(), encrypted=False)
+        for seq, chunk in enumerate(chunks, start=1):
+            if seq > camera.acked + 50 and not await camera.wait_for_ack(seq - 50, timeout=1.0):
+                camera.stalled_at = seq
+                return
+            await send(mime, chunk, seq=seq)
+        if finish:
+            await send("application/json", notice("stream_status", status="finished"), encrypted=False)
+    return script
+
+
+@pytest.mark.anyio
+async def test_a_long_download_keeps_going_because_every_25th_part_is_acknowledged():
+    chunks = [bytes([i % 256]) * 188 for i in range(130)]
+    got = []
+    async with FakeCamera(PASSWORD, [], script=windowed(chunks)) as camera:
+        result = await media.download("127.0.0.1", PASSWORD, {"download": {"media_type": 0}}, got.append,
+                                      port=camera.port, max_bytes=10**6, max_seconds=10)
+    assert camera.stalled_at is None and got == chunks
+    assert (result.bytes, result.parts, result.complete, result.stopped) == (130 * 188, 130, True, "")
+    acks = [int(h["x-data-received"]) for h, _ in camera.received if "x-data-received" in h]
+    assert acks == [25, 50, 75, 100, 125]
+    assert all(h.get("x-session-id") == "4242" for h, _ in camera.received if "x-data-received" in h)
+    assert camera.request_headers["x-data-window-size"] == "50"
+
+
+@pytest.mark.anyio
+async def test_a_download_stops_at_its_size_limit_and_says_so():
+    chunks = [b"\x47" * 1000] * 20
+    got = []
+    async with FakeCamera(PASSWORD, [], script=windowed(chunks)) as camera:
+        result = await media.download("127.0.0.1", PASSWORD, {"download": {}}, got.append, port=camera.port, max_bytes=5500, max_seconds=10)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert (result.bytes, result.stopped, result.complete) == (5000, "size", False) and len(got) == 5
+    assert camera.stops()
+
+
+@pytest.mark.anyio
+async def test_a_download_stops_at_its_time_limit():
+    async with FakeCamera(PASSWORD, [], script=windowed([b"\x47" * 188] * 3, finish=False)) as camera:
+        result = await media.download("127.0.0.1", PASSWORD, {"download": {}}, lambda data: None, port=camera.port,
+                                      timeout=5, max_bytes=10**6, max_seconds=0.5)
+    assert (result.stopped, result.complete, result.parts) == ("time", False, 3)
+
+
+@pytest.mark.anyio
+async def test_an_event_picture_download_is_acknowledged_like_a_recording():
+    jpeg = fakes.TINY_JPEG
+    chunks = [jpeg[i : i + 4] for i in range(0, len(jpeg), 4)]  # more than 25 parts
+    async with FakeCamera(PASSWORD, [], script=windowed(chunks, mime="image/jpeg")) as camera:
+        fmt, data = await media.fetch_image("127.0.0.1", PASSWORD, {"download": {"media_type": 2, "file_id": "f1"}}, port=camera.port)
+    assert (fmt, data) == ("jpeg", jpeg) and camera.acked >= 25
