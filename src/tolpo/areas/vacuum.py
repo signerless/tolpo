@@ -283,7 +283,8 @@ async def clean_start(registry, caller, device, mode=0, map_id=None, room_ids=No
 class Zone(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     id: int = Field(strict=True, ge=0, le=2**31 - 1, description="Zone id")
-    vertexs: list[list[int]] = Field(strict=True, min_length=4, max_length=4, description="Four corners in existing map coordinates, in perimeter order")
+    vertexs: list[Annotated[list[Annotated[int, Field(strict=True, ge=-(2**31 - 1), le=2**31 - 1)]], Field(min_length=2, max_length=2)]] = Field(
+        strict=True, min_length=4, max_length=4, description="Four [x, y] corners in existing map coordinates, in perimeter order")
     suction: int = Field(strict=True, default=2, ge=0, le=5, description="Protocol suction level")
     cistern: int = Field(strict=True, default=0, ge=0, le=3, description="Protocol water level")
     clean_number: int = Field(strict=True, default=1, ge=1, le=3, description="Cleaning passes")

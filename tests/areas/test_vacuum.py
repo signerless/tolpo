@@ -422,6 +422,8 @@ async def test_invalid_targets_settings_schedules_before_wire(house):
     {**ZONE, "vertexs": [[0, 0], [0, 0], [1, 1], [0, 1]]},
     {**ZONE, "vertexs": [[0, 0], [2**40, 0], [2**40, 200], [0, 200]]},
     {**ZONE, "vertexs": [[0, 0], [100, 0], [100, 200], [0, True]]},
+    {**ZONE, "vertexs": [[0, 0, 5], [100, 0], [100, 200], [0, 200]]},
+    {**ZONE, "vertexs": [[0, 0], [100, 0], [100, 200], [0, 200], [0, 0]]},
 ])
 async def test_zone_validation_before_wire(house, zone):
     reg, caller, _ = house()
