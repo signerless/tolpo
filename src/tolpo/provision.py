@@ -25,22 +25,40 @@ from .registry import DeviceUnavailable, Entry, Forbidden, NotFound, RegistryErr
 from .views import clean
 
 
-def authorize(registry, entry, method, confirm=None):
-    """The operation names are policy declarations, not raw protocol methods."""
+def authorize(registry, entry, method, confirm=None, subject=None):
+    """The operation names are policy declarations, not raw protocol methods.
+
+    `subject` is the exact device the action lands on when that is not `entry`,
+    for example the child that a hub unpairs. The phrase always names it.
+    """
     rule = policy.rule_for(entry.kind, method)
     if rule is None:
         raise Forbidden(f"{method!r} is not supported on {entry.kind} devices")
     if not policy.permitted(rule, registry.cfg.tier, registry.cfg.allow_methods):
         raise Forbidden(f"{method!r} is a level {int(rule.tier)} action ({rule.summary}) and the owner's policy blocks it")
-    phrase = policy.confirmation(rule, entry.slug)
+    phrase = policy.confirmation(rule, subject or entry.slug)
     if rule.needs_confirmation and confirm != phrase:
         raise NeedsConfirmation(f"{method!r}: {rule.summary} Call again with confirm={phrase!r}")
+    # Every authorized action authenticates. Refuse it when owner-only sign-in
+    # cannot be enforced, before any device or host is touched.
+    _install_fallback_guard()
     return rule
+
+
+def exact_entry(registry, ref):
+    """A lifecycle target is named by its registry id or device id only.
+
+    Names and globs match device-supplied text, so they never pick a device to
+    pair, unpair, rename, move to another Wi-Fi or erase.
+    """
+    found = [e for e in registry.resolve(ref) if ref in (e.slug, e.device.device_id)]
+    if len(found) != 1:
+        raise NotFound(f"no device has the id {clean(ref, 80)!r}; lifecycle actions need the exact device id")
+    return found[0]
 
 
 _private = contextvars.ContextVar("provision_private", default=False)
 _factory_installed = False
-_fallback_installed = False
 
 
 class _NoFallbackMapping(Mapping):
@@ -330,10 +348,12 @@ async def pair_hub(registry, adapter, entry, timeout=10, confirm=None):
 
 
 async def pair_remove(registry, adapter, entry, child, confirm=None):
-    authorize(registry, entry, "pair_remove", confirm)
-    target = registry.resolve_one(child)
+    # The phrase names the child that is removed, not only its hub, so one
+    # confirmation can never remove a different child of the same hub.
+    target = exact_entry(registry, child)
     if target.root is not entry:
         raise RegistryError("The selected device is not a child of this hub")
+    authorize(registry, entry, "pair_remove", confirm, subject=target.slug)
     await invoke(registry, adapter, entry, "pair_remove", device_id=target.device.device_id)
     state = await refresh(registry, entry)
     removed = target.device.device_id not in {d.device_id for d in entry.device.children}
@@ -488,7 +508,7 @@ class SoftAPPlan:
     def validate(self):
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", self.target):
             raise RegistryError("Provisioning target must be a short lowercase identifier")
-        if not self.device_id or clean(self.device_id, 256) != self.device_id or len(self.device_id) > 128:
+        if not isinstance(self.device_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", self.device_id):
             raise RegistryError("Provide the exact expected device id")
         try:
             address = ipaddress.ip_address(self.ap_host)
@@ -514,7 +534,8 @@ def softap_entry(plan):
 
 def softap_plan(registry, plan, confirm=None):
     plan.validate()
-    authorize(registry, softap_entry(plan), "pair_softap", confirm)
+    # The phrase names the expected device id, not only the agent's label.
+    authorize(registry, softap_entry(plan), "pair_softap", confirm, subject=plan.device_id)
     return {"target": plan.target, "steps": [
         "Save the host's current Wi-Fi connection.",
         "Join the device's open setup Wi-Fi network.",
