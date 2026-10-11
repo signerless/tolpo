@@ -84,33 +84,91 @@ class _NoFallbackCredentials:
         return self._value("password")
 
 
+class GuardUnavailable(Forbidden):
+    """python-kasa changed in a way the owner-only sign-in guard does not know."""
+
+
+def _refuse_guard():
+    raise GuardUnavailable("Owner-only sign-in cannot be enforced with the installed python-kasa, so this action is refused")
+
+
+# Modules that can reach python-kasa's fallback sign-in values, and
+# whether their fallback mapping is read only at login time. The SMARTCAM
+# transport reads it while it is built, so only its decoder is wrapped.
+_FALLBACK_MODULES = {
+    "kasa.transports.aestransport": True,
+    "kasa.transports.klaptransport": True,
+    "kasa.transports.ssltransport": True,
+    "kasa.transports.linkietransport": True,
+    "kasa.transports.sslaestransport": False,
+    # Camera admin password change tries fallback passwords. Not used here.
+    "kasa.smartcam.smartcamdevice": True,
+}
+_FALLBACK_NAMES = ("DEFAULT_CREDENTIALS", "get_default_credentials")
+# Transport classes that cache a fallback identity on the instance.
+_CACHING_TRANSPORTS = ("AesTransport", "SslTransport", "SslAesTransport")
+
+
+def _guard_function(original):
+    def guarded(value):
+        # Inside a protected call never even decode the fallback value.
+        return _NoFallbackCredentials(None if _private.get() else original(value))
+
+    guarded._tolpo_guarded = True
+    return guarded
+
+
 def _install_fallback_guard():
     """Kasa 0.11 has no public owner-only authentication option.
 
     These context-aware guards deny fallback values, not owner authentication.
     No built-in credential values are read or copied by this area. Other tasks
     retain normal library behavior outside the protected context.
+
+    The guards depend on python-kasa internals, so they fail closed: when a
+    known module or name is missing, or any other kasa module can reach the
+    fallback values, every lifecycle action is refused. This runs on every call.
     """
-    global _fallback_installed
-    if _fallback_installed:
-        return
-    from kasa.transports import aestransport, klaptransport, sslaestransport
+    import importlib
+    import pkgutil
 
-    for module in (aestransport, klaptransport):
-        module.DEFAULT_CREDENTIALS = _NoFallbackMapping(module.DEFAULT_CREDENTIALS)
-    original = sslaestransport.get_default_credentials
+    try:
+        from kasa import credentials as kasa_credentials, transports
 
-    def camera_credentials(value):
-        # SMARTCAM caches fallback credentials during construction. Inside
-        # our context do not even decode them. Outside it, wrap without reading.
-        return _NoFallbackCredentials(None if _private.get() else original(value))
-
-    sslaestransport.get_default_credentials = camera_credentials
-    _fallback_installed = True
+        for info in pkgutil.iter_modules(transports.__path__):
+            importlib.import_module(f"{transports.__name__}.{info.name}")
+        originals = [getattr(kasa_credentials, name) for name in _FALLBACK_NAMES]
+    except Exception:
+        _refuse_guard()
+    for name, wrap_mapping in _FALLBACK_MODULES.items():
+        module = sys.modules.get(name)
+        mapping = getattr(module, "DEFAULT_CREDENTIALS", None)
+        decode = getattr(module, "get_default_credentials", None)
+        if not isinstance(mapping, Mapping) or not callable(decode):
+            _refuse_guard()
+        if wrap_mapping and not isinstance(mapping, _NoFallbackMapping):
+            module.DEFAULT_CREDENTIALS = _NoFallbackMapping(mapping)
+        if not getattr(decode, "_tolpo_guarded", False):
+            module.get_default_credentials = _guard_function(decode)
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("kasa.") or name in _FALLBACK_MODULES or name == kasa_credentials.__name__:
+            continue
+        values = vars(module).values() if hasattr(module, "__dict__") else ()
+        if any(hasattr(module, n) for n in _FALLBACK_NAMES) or any(v is o for v in values for o in originals):
+            _refuse_guard()  # a new path to the fallback values this guard does not cover
 
 
 def _guard_cached_credentials(entry):
-    transport = getattr(getattr(entry.top.device, "protocol", None), "_transport", None)
+    protocol = getattr(entry.top.device, "protocol", None)
+    transport = getattr(protocol, "_transport", None)
+    if transport is None:
+        from kasa.protocols import BaseProtocol
+
+        if isinstance(protocol, BaseProtocol):
+            _refuse_guard()  # the transport moved; its cache cannot be checked
+        return
+    if type(transport).__name__ in _CACHING_TRANSPORTS and not hasattr(transport, "_default_credentials"):
+        _refuse_guard()  # the fallback cache was renamed
     cached = getattr(transport, "_default_credentials", None)
     if cached is not None and not isinstance(cached, _NoFallbackCredentials):
         transport._default_credentials = _NoFallbackCredentials(cached)
