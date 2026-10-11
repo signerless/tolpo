@@ -40,7 +40,8 @@ No device or network host was contacted by this implementation agent.
 `kind` is `schedule`, `countdown`, or `antitheft` (Away Mode). All rule writes require level 2.
 Rules take a complete object, with `enable` as a boolean. Edit also requires `id`.
 Times are minutes after midnight, from 0 to 1439, in the device's local time zone.
-Use `mode: "REPEAT"` and a `week_day` mask from 1 to 127. Bit 0 is Sunday and bit 6 is Saturday.
+Use `mode: "REPEAT"` and a `week_day` mask from 1 to 127.
+UNVERIFIED: bit 0 is taken to be Sunday and bit 6 Saturday. No real rule has confirmed the order.
 For `mode: "ONCE"`, use `week_day: 0` and a valid `year`, `month`, and `day`.
 
 Schedules use `s_type` (`NORMAL`, `SUNRISE`, or `SUNSET`), `s_min`, and `desired_states`
@@ -70,7 +71,7 @@ Effects require `light_effect`. Fade options use `smooth_transition_on`, `smooth
 Only supported features are listed. Device bounds also apply. A zero fade duration disables that fade.
 Built-in effects come from python-kasa's `Module.LightEffect`, including its 17 classic strip definitions
 and the bulb's Party and Relax choices. Exact names come from `light_features`, including any renamed bulb effects.
-Built-in effects default to brightness 50 and a 1000 millisecond transition. Both can be set explicitly.
+Leave out brightness to keep the light's current brightness, and transition to keep the effect's own timing.
 
 Custom effects require `id`, a single-line `name`, and `type` (`static`, `sequence`, `random`, or `pulse`).
 `custom` is 1 and `enable` is 0 or 1. Brightness defaults to 50. Animated transitions default to 1000 milliseconds.
@@ -88,7 +89,8 @@ The tool applies an effect locally. It does not store a cloud library or overwri
 
 ## Auto-White, presets, and Lighting Effect V2
 
-Auto-White uses the confirmed `get_auto_light_info` and `set_auto_light_info` method names.
+UNVERIFIED: Auto-White uses `get_auto_light_info` and `set_auto_light_info` with `enable` and `mode`, as named
+in the app. No real device has answered them yet.
 Enabling requires one of `circadian`, `light_compensate`, or `light_track`. Disabling can omit the mode.
 These writes require level 2. Auto Biorhythm node editing is skipped because its local methods are unconfirmed.
 
@@ -106,7 +108,9 @@ Classic built-in strip templates can be listed and applied through the python-ka
 
 The L430C fixture reports default states and seven state presets. It exposes on/off fades with a 60 second
 maximum, but no effect or LED feature. Its `get_auto_light_info` call returns an unknown-method error.
-The Auto-White tools report that failure. They do not assume support from a component flag.
+It still lists an `auto_light` component, so a component flag is not proof of support.
+`light_set_auto_white` reads the mode first and refuses before writing when the light does not know the method.
+Any tool says plainly that the light does not support a method when the light answers that it is unknown.
 V2 metadata is read from `get_device_info.segment_effect` when present, as on this bulb,
 and otherwise from `get_segment_effect_rule`.
 
@@ -127,12 +131,3 @@ unknown fields, identifiers, weekday masks, calendar dates, outage capabilities,
 text cleaning, device kind and child targeting, default and preset preservation, complete preset lists,
 custom effect validation and support, device refusals, refresh failures, and omitted V2 encodings.
 Scratch copies were removed. There are no level 3 or 4 methods in this area.
-
-The sandbox cannot run the existing loopback connection check
-`tests/test_snapshot.py::test_real_ffmpeg_failure_names_no_password`: ffmpeg reports unreachable
-instead of connection refused. That case is excluded from the sandbox-safe suite run, in addition
-to the brief's exclusions of `tests/test_media.py` and `tests/test_pictures.py`.
-
-No shared source changes are needed to load the tools. Before shipping the npm package, the lead needs
-to add `src/tolpo/areas/*.py` to the `package.json` files list. Its current root-level Python glob
-does not include the area package. The assigned shared files were left untouched.

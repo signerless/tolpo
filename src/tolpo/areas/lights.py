@@ -246,6 +246,7 @@ def rule_object(kind, value, *, editing=False):
     # UNVERIFIED: uppercase enum wire values are inferred from the app's enum beans.
     # Confirm the serialization on a SMART bulb before using rules on real hardware.
     choice(out.get("mode"), "mode", {"ONCE", "REPEAT"})
+    # UNVERIFIED: the weekday bit order (bit 0 Sunday) has not been seen in a real rule.
     days = integer(out.get("week_day"), "week_day bit mask", 0, 127)
     if out["mode"] == "REPEAT":
         if days == 0:
