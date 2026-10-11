@@ -90,7 +90,7 @@ Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`
 - The answer of `getCircularRecordingConfig` (`{"harddisk_manage": {"harddisk": {"loop": "on"}}}` expected) and the
   shape of `setCircularRecordingConfig`, `setRecordPlan` and `formatSdCard` on a real camera.
 - The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList` were checked on a C465, a C610 and
-  a C225. `searchVideoWithUTC` needs `"id": 0` in its request: without it the camera answers INTERNAL_UNKNOWN_ERROR. The
+  a C225. `searchVideoWithUTC` needs `"id": 0` and a `player_id` in its request: without them the camera answers INTERNAL_UNKNOWN_ERROR (the C465 and C610 take either one, the C225 only the `player_id`). The
   answer is `search_video_results`, a list of `{"search_video_results_N": {startTime, endTime, channel, video_type}}`,
   with `to_be_continued`. `searchDetectionList` answers `search_detection_list` with flat rows (`start_time`, `end_time`,
   `alarm_type`, and a number `events_1`), `total_num` and `to_be_continued`; the rows carry no `file_id`. Older firmware

@@ -354,10 +354,11 @@ async def recordings_of_day(registry: Registry, caller: Any, entry: Entry, day: 
     segments: list[dict[str, Any]] = []
     more = False
     for first in range(0, MAX_SEGMENTS, PAGE):
-        # Checked on a C465 and a C610: without an `id` the camera answers INTERNAL_UNKNOWN_ERROR, with `id: 0` it lists the day.
+        # Checked on a C465, a C610 and a C225: without an `id` or a `player_id` the camera answers INTERNAL_UNKNOWN_ERROR.
+        # The C465 and C610 take either, the C225 (playback version 6) needs the `player_id`, so both are sent.
         raw = await caller.call(
             entry, "searchVideoWithUTC",
-            {"playback": {"search_video_with_utc": {"channel": 0, "id": 0, "start_time": start, "end_time": end, "start_index": first, "end_index": first + PAGE - 1}}},
+            {"playback": {"search_video_with_utc": {"channel": 0, "id": 0, "player_id": media.CLIENT_UUID, "start_time": start, "end_time": end, "start_index": first, "end_index": first + PAGE - 1}}},
         )
         items, section = _first_list((raw or {}).get("playback"), "search_video_results")
         segments += [s for s in (_segment(i) for i in items) if s]
