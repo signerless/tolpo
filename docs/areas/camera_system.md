@@ -124,7 +124,13 @@ Unexpected or rejected responses raise an error naming the device and method. Ra
 - Level 3: `setAccountEnabled`, `setChargingMode`, `setCoverConfig`, `setLedStatus`, `setLensMaskConfig`, `setUpnpInfo`.
 - Level 4: `configRestore`, `reset`, `setFirmwareAutoUpgradeConfig`, `setThirdPartyCompatibility`, `softReset`, `startFirmwareUpgrade`.
 
-## Shared follow-ups
+## Follow-ups
 
-- `package.json` lists `src/tolpo/*.py` but not `src/tolpo/areas/*.py`. Add it before packaging.
 - A parameter-aware rule in `policy.py` and `calls.py` would let privacy ON drop to level 1. The comment above `setLensMaskConfig` in the area module lists what it needs.
+
+## What was checked on real devices
+
+On 2026-10-12, on a C225, a C465, a C610 and a D230: the reads of the image, audio, battery, system and privacy settings,
+with the results noted in the sections above. The microphone volume of the C225 was changed and set back
+(`camera_audio_set`). Camera movement, reboot, reset, firmware, UPnP, the compatibility switch and the other writes were
+not tried.

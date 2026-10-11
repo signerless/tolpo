@@ -86,13 +86,12 @@ Confirm that add returns an id, edits retain the requested action, list paging a
 delete affects only that id, and enable changes the requested rule.
 Sunrise, sunset, paired start/end schedule actions and schedule runtime statistics are deferred.
 
-Safety checks used 35 scratch mutations. Each change was confirmed with `diff` and caused test failures.
-The original source was kept intact.
-Tests caught disabled levels and confirmations, leaked unknown fields, unflattened text, relaxed numeric and boolean
-validation, invalid times and weekday masks, mixed date/day rules, invalid ids, wrong device and child targets,
-relaxed location/history bounds, MCP type coercion, reversed calibration limits, zero windows and false success
-after refresh failure. The lead should also run the full socket tests outside the Codex sandbox.
-Additional mutations covered dates, default capabilities, name/icon syntax, interval choices, low-power support,
-LED choices, malformed responses and private location output. All were caught.
-The npm package needs `src/tolpo/areas/*.py` added to `package.json`'s `files` list by the lead.
-The current dry run omits all area modules. No shared files were changed here.
+Each safety rule (levels, confirmations, unknown fields, text cleaning, numeric and boolean validation, times and weekday
+masks, rule ids, device and child targets, location and history bounds, strict types, refresh failures) was broken on
+purpose, and a test failed each time.
+
+Checked on a real P115 on 2026-10-12: the reads of rules, LED, default state and status; power off and on; a countdown
+rule (created disabled, with the action equal to the current state, listed, then deleted); the LED mode (changed and set
+back); and the power-on default (set to always on, which the device stores as type `custom` with `state.on` true, and set
+back to `last_states`). Schedules, Away Mode, the electricity price, energy clearing, auto-off, protections, location and
+the switch and dimmer tools were not tried on real devices.

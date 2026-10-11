@@ -54,7 +54,7 @@ async def _scan(cfg: Config) -> None:
 NOT_ENABLED = (
     "To allow pictures from this camera, put its name under [cameras] in ~/.config/tolpo/config.toml:\n"
     '    snapshots = ["<the camera name as shown in the Tapo app>"]\n'
-    "plus the camera account (username and password) that you create in the Tapo app. See the README."
+    "No camera account is needed. See the README."
 )
 
 

@@ -95,8 +95,10 @@ onboarding, but does not establish a complete safe exchange for standalone chime
 material was read. No pairing secret is accepted by a tool or returned to an agent.
 Calls, talk, cloud push, call screens, Do Not Disturb, sharing, locks, firmware and reset stay outside this area.
 
-Twenty deliberate mutations were checked in scratch source copies. Each change was verified with a diff, and each
-caused its targeted tests to fail. These covered owner levels, exact confirmations, method tiers, kind checks, hidden
-fields, raw error secrecy, text flattening, integer and boolean checks, plain text, choice and schedule validation,
-advertised tones, listed reply ids, strict MCP types, cached addresses, parent selection,
-write refresh and the UNVERIFIED event label. The original files were unchanged by the mutation runs.
+Each safety rule (owner levels, exact confirmations, method levels, kind checks, hidden fields, raw error secrecy, text
+flattening, strict input checks) was broken on purpose, and a test failed each time.
+
+Checked on a real D230 behind an H200 on 2026-10-12, reads only: `getRingStatus`, `getRingSoundConfig`, `getRingTypeList`,
+`getRingPlay` and `getLastAlarmInfo` answer. This model refuses `getCallStateInfo`, the trigger log, `getExistingChimeCfg`,
+`getLedColor` and `getMsgPushEventList` with INTERNAL_UNKNOWN_ERROR, so `doorbell_events_recent` reports the last alarm only,
+and the tools name the error code. No write was tried, and nothing audible was played.

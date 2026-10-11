@@ -17,7 +17,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest        # Python tests, simulated devices, no hardware
 npm test                          # tests of the Node launcher (runs `node --test`)
 python3 scripts/check_release.py  # package.json, src/tolpo/__init__.py and server.json agree on the version
-npm pack --dry-run                # the npm package: about 15 files, no __pycache__
+npm pack --dry-run                # the npm package: about 50 files, no __pycache__
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python scripts/smoke_mcp.py   # starts the server, checks the handshake
 ```
 

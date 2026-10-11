@@ -50,7 +50,7 @@ Actions run in order:
 - `delay`: Wait `seconds` before the following action. A delay cannot be the last action.
 - `message`: Add a short `message` to the owner's outbox.
 
-For tool actions, this area records tiers as later areas register their tools. Earlier tools without an exact tier use conservative levels: read 0, ordinary write 2, destructive write 4. Built-in power and light use level 1. A tool runs only at or below the owner's level: `allow_methods` names device methods and never unlocks a tool. Tools needing request context or resolver interaction are unavailable to unattended rules. A custom `ToolExecutor` adapter can integrate other host tools, but must recheck their policy on execution.
+For tool actions, this area records tiers as later areas register their tools. Earlier tools without an exact tier use conservative levels: read 0, ordinary write 2, destructive write 4. Built-in power and light use level 1. A tool run by a rule runs only at or below the owner's level: `allow_methods` names device methods and never unlocks a tool there. Tools needing request context or resolver interaction are unavailable to unattended rules. A custom `ToolExecutor` adapter can integrate other host tools, but must recheck their policy on execution.
 Security and lifecycle actions require a fresh confirmation passed to `automation_tick`. For methods, the phrase is `<method> <device slug>`. For tools, pass the phrase required by the tool's guarded caller. Confirmations are never stored. Background execution cannot confirm these actions. Delayed execution does not retain a previous confirmation. A direct tick can supply a new confirmation for a due action. One confirmation runs at most one security or lifecycle action, even when several are due in the same tick.
 Power and light also require level 1 and the registry's feature policy. Their targets must be lights, plugs or switches. An opt-in camera state feature cannot turn these actions into a privacy change. A method or tool exception stops that run, appears in tick results, and is recorded in the outbox by exception type and target. Raw device errors and method responses are not exposed.
 
@@ -81,7 +81,7 @@ Only one tolpo process runs the background loop for a state directory. It holds 
 
 Rule reference cycles are rejected at creation. Runtime ancestor chains and minimum intervals provide another guard.
 A rule with pending delayed actions cannot queue another run. Disabling or deleting it cancels those actions.
-Set `killed: true` with `automation_settings` to stop the loop, discard all pending runs and block manual ticks. The kill stops a running tick at once, even in the middle of a slow device call, and the remaining actions of that tick do not run. An engine in another tolpo process obeys a kill saved in the state file at its next tick. Any agent that can call `automation_settings` can also clear the switch.
+Set `killed: true` with `automation_settings` to stop the loop, discard all pending runs and block manual ticks. The kill stops a running tick at once, even in the middle of a slow device call, and the remaining actions of that tick do not run. An engine in another tolpo process obeys a kill saved in the state file at its next tick. An agent can clear the switch only at level 3 with the phrase `automation_resume`. The owner can clear it from a terminal with `tolpo automation resume`.
 Settings replace the full settings object, so include any timezone, location or quiet hours you want to keep.
 
 Messages and failures append to `automation-alerts.jsonl` in the same directory.
@@ -95,11 +95,16 @@ On the owner's T110, T300 and T310 sensors behind an H200, `get_trigger_logs` wi
 The local engine substitutes for cloud Smart Actions. Device-native schedules, countdowns, Away mode, heating schedules and camera schedules are outside this package. Their writes need captured parameter shapes or their owning areas.
 Geofencing, cloud sync, voice assistants, AI actions and push delivery are not implemented.
 
-## Verification
+## What was checked
 
-Safety mutations in isolated scratch copies were caught by tests: action levels, fresh confirmations, hidden features, private parameter keys, light bounds, name flattening, raw error hiding, response hiding, cycles, the kill switch, cooldowns, dry-run isolation, private file modes, cursor reservation, camera privacy boundaries, RTSP refusal, MCP validation privacy, store versions and queue validation. Every mutation was checked with a diff before testing.
-The prescribed Python suite reached a pre-existing localhost ffmpeg socket test whose expected error differs under the sandbox. With that additional socket test deselected, the allowed suite passed. Node launcher tests and release metadata checks also passed.
-The npm file list needs explicit `src/tolpo/automation/*.py` and `src/tolpo/areas/*.py` entries before this package ships. No shared file was edited.
+The rule engine is tested with simulated devices and a fake clock. Each safety rule (action levels, fresh confirmations,
+hidden features, private parameter keys, cycles, the kill switch, one engine per state folder, symbolic links in the
+state folder) was broken on purpose, and a test failed each time.
+
+Checked on real devices on 2026-10-12: a rule with a clock trigger and a power action was created, enabled, run by the
+engine, and it switched a real plug. The rule was then deleted and the plug set back. Still to check on hardware: the
+rows of the hub trigger log and the names of button events, the last-alert features of each camera model, and rules that
+run over days.
 
 ## Who may do what
 

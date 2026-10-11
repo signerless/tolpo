@@ -41,15 +41,9 @@ Local removal is distinct from cloud unbinding.
 After successful pairing, refresh the hub and call `registry.discover()`, the
 same rescan used by the existing tool. Return new devices using registry ids
 and cleaned names. Removal and hub reset send nothing to the other children and
-leave their registry entries alone. The shared registry retains removed child
-entries. Removal marks the selected entry offline, but a later hub refresh marks
-it online again. Calls to that stale child fail at the hub. A shared change in
-`Registry._update_locked` that drops children missing from a successful hub
-update would remove it.
-
-Merge also needs `package.json` to include `src/tolpo/areas/*.py` in its `files`
-list. The current npm manifest ships root Python modules but omits areas. No
-shared file was changed by this area.
+leave their registry entries alone. After a successful hub update, the registry
+drops the children the hub no longer lists, so a removed child disappears from
+`list_devices` at the next refresh and keeps its short id for when it is paired again.
 
 ## SoftAP plan
 
@@ -160,15 +154,9 @@ and authenticated SMARTCAM devices, SMART reset and reboot, and host restoration
 on macOS and Linux before relying on them. Verify device self-binding and the
 LAN/cloud state after SMART SoftAP setup. No physical device was contacted.
 
-Safety checks were deliberately broken in scratch copies and caught by failing
-tests: tier checks, per-call confirmation, hidden Wi-Fi values, flattened names,
-name and environment-name validation, SSID byte limits, account matching,
-SMARTCAM reset exclusion, expected device identity, excluded robot onboarding,
-host restoration, cancellation shielding, private logs, error redaction, and
-default-credential fallback guards. Each mutation was confirmed with a diff.
+Each safety rule was broken on purpose, and a test failed each time: tier checks, per-call confirmation, hidden Wi-Fi
+values, flattened names, name and environment-name validation, SSID byte limits, account matching, SMARTCAM reset
+exclusion, expected device identity, host restoration, cancellation shielding, private logs, error redaction and the
+default-credential fallback guards.
 
-The socket-free Python suite excludes `tests/test_media.py`,
-`tests/test_pictures.py` and the existing loopback ffmpeg connection test
-`test_real_ffmpeg_failure_names_no_password`. That test reports `unreachable`
-in this sandbox instead of its expected `refused`. Node launcher tests and
-release metadata checks also passed. No MCP server or network scan was run.
+No pairing, removal, Wi-Fi join, reset or SoftAP step was tried on a real device or host.

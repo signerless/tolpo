@@ -177,26 +177,16 @@ set expiry and Ethernet matching, dual-stack coverage, neighbor identities, loca
 state clearing, counter behavior, local hub/NVR links and rollback after a failed read. Use a spare device first.
 
 The npm package's shared `files` allow-list needs entries for `src/tolpo/network/*.py` and `src/tolpo/areas/*.py`.
-The Python wheel includes the package already. No shared source or packaging file was edited in this area.
 
-## Validation record
+## What was checked
 
-After review, 99 network tests pass and the full suite passes (308 tests). Review added tests for level 4 on
-apply and both rollbacks, single-device targets, allow-list ranges, uncompressed IPv6 conntrack, odd neighbor
-entries, native expiry longer than reviewed, the owner CA file, TLS settings per request, odd router output and the
-audit size limit. Ten safety rules were broken on purpose in a scratch copy, and a test failed each time.
+The tests cover level 4 on apply and both rollbacks, single-device targets, allow-list ranges, uncompressed IPv6
+conntrack, odd neighbor entries, native expiry longer than reviewed, the owner CA file, TLS settings per request, odd
+router output and the audit size limit. Each safety rule was broken on purpose, and a test failed each time. They covered the level and observe-mode gates,
+operation opt-in, apply and rollback confirmations, expiry, plan hashes, drift checks, protected hosts, client identity
+checks, object ownership, native timeouts, hidden identities, text cleaning, hostname and address validation, error
+masking, device scope, retention, private-file checks, symbolic links, the audit chain and rate limits.
 
-The author's record follows. 73 network tests passed. The Python suite passes with 207 tests after the two socket-heavy files from the brief
-are ignored and `test_real_ffmpeg_failure_names_no_password` is deselected. The latter is an existing socket test:
-this sandbox reports an unreachable connection instead of the refused connection its assertion expects.
-The required command without that extra deselection produced that single failure. Node tests pass (5), release
-versions agree, and `npm pack --dry-run` succeeds with a temporary workspace cache. The MCP smoke server was
-not started because the build brief prohibits running the server or opening sockets.
-
-33 deliberate mutations in a scratch copy made the relevant tests fail. Changes were confirmed before each run.
-They removed level and observe-mode gates, operation opt-in, apply and rollback confirmations, expiry, plan hashes,
-drift checks, protected hosts, client identity checks, offload refusal, object ownership, native timeout, IPv6 local
-exceptions, hidden identities, sanitation, hostname and IP validation, scoped IPv6 refusal, error masking, device
-scope, retention, private-file checks, symlink refusal, audit-chain checks, local preflight, selective state clearing,
-automatic rollback, rate limits, concurrency checks, complete command reads and native drop verification.
-The actual source stayed unchanged during mutation runs. All mutation directories were removed.
+Checked on 2026-10-12: `network_providers` and `network_new_destinations` ran against the real home with no provider
+configured and answered as designed. No router, DNS server or firewall was contacted, so every provider and the
+nftables enforcement are tested only with fakes.

@@ -59,8 +59,9 @@ single methods above it (`policy.allow_methods`).
 | 3 | SECURITY | security or safety: privacy off, alarm or arm state, lock, protections, audio out |
 | 4 | LIFECYCLE | pair, unpair, factory reset, firmware install, Wi-Fi change, account actions |
 
-Levels 3 and 4 need a confirmation phrase on every call: `confirm="<method> <device id>"`. The caller refuses without
-it and says which phrase is needed. A tool at level 3 or 4 takes a `confirm` argument and passes it on.
+Levels 3 and 4 need a confirmation phrase on every call: `confirm="<method> <device id>"` (a few name a change or a plan
+instead). The caller refuses without it and says which phrase is needed, so the phrase is a pause for the agent to ask
+the person, not proof that the person agreed. A tool at level 3 or 4 takes a `confirm` argument and passes it on.
 
 ## Rules
 

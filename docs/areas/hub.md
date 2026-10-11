@@ -113,12 +113,9 @@ The audit's `getSubDevDiagnoseMode` is a model getter, not a confirmed wire meth
 Pairing, unpairing, setup-code reveal, cloud protection modes, cloud push rules, long history, H110 infrared,
 and sub-GHz switches and relays are outside this page's scope.
 
-Safety checks used 15 deliberate mutations in scratch copies. Diffs confirmed each mutation.
-Tests caught reduced setting and alarm levels, automatic confirmation, private response fields, missing text cleaning,
-missing integer, numeric, boolean and choice checks, reversed comfort bounds, missing model checks,
-cross-hub window links and events, missing rename validation, and nonnumeric history values.
-The rename mutation first exposed a weak test that stopped at policy refusal. The corrected test runs at level 2
-and catches the missing input check. Scratch files were removed and the implementation stayed intact.
+Each safety rule (setting and alarm levels, confirmations, private fields, text cleaning, input checks, model checks,
+cross-hub access, rename validation) was broken on purpose, and a test failed each time.
 
-The lead must add `src/tolpo/areas/*.py` to `package.json`'s `files` list so npm ships the area package.
-No device or server was contacted by this area.
+Checked on a real H200 with T110, T300 and T310 sensors on 2026-10-12: the alarm settings and tone list, diagnostics, the
+event log (empty), the hub light and the sensors' settings reads. The hub light (`hub_led_set`, level 3 with the phrase
+`setLedStatus <hub id>`) was turned off and on again. The siren, sensor setting writes and the valve tools were not tried.

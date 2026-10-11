@@ -125,9 +125,9 @@ Check default-state writes and preset saves on a bulb, rule enums and removal on
 effects and painting boundaries on a strip, and child defaults, rules, and presets on a ceiling light.
 Check Auto-White on a model that supports its methods. The L430C reports the read method as unknown.
 
-Twenty-three deliberate scratch mutations were caught by failing assertions. Each change was confirmed
-with a diff. Checks covered method levels, feature permissions, integer and boolean validation,
-unknown fields, identifiers, weekday masks, calendar dates, outage capabilities, hidden values,
-text cleaning, device kind and child targeting, default and preset preservation, complete preset lists,
-custom effect validation and support, device refusals, refresh failures, and omitted V2 encodings.
-Scratch copies were removed. There are no level 3 or 4 methods in this area.
+Each safety rule (method levels, feature permissions, input validation, unknown fields, identifiers, weekday masks,
+calendar dates, hidden values, text cleaning, child targeting, preserved defaults and presets, refusals, refresh failures)
+was broken on purpose, and a test failed each time. There are no level 3 or 4 methods in this area.
+
+Nothing in this area was tried on a real light. The four L430C bulbs did not answer during the live check on 2026-10-12
+(they were probably off at the wall).

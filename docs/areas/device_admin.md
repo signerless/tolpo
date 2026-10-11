@@ -95,7 +95,7 @@ readiness must be checked on hardware. There are no batch installs or automatic 
 
 Wi-Fi changes, reset, unpair, account actions, sharing, integrations, cloud catalogue access and
 log export are outside this area. Cloud APIs need signing material not used by this implementation.
-No shared files need changes for these tools. Other areas can opt into the room resolver by import.
+Other areas can opt into the room resolver by import.
 
 ## Verification
 
@@ -110,13 +110,10 @@ suitable SMART device, including version mismatch refusal, reboot, progress and 
 Sensor and hub-child support is conditional on the modules the library actually exposes.
 The conditional vacuum firmware path also needs verification on hardware.
 
-Safety checks were broken on purpose in scratch copies. Tests failed for all 14 mutations:
-device setting levels, local write levels, firmware level preflight, confirmation, expected version,
-hidden fields, text flattening and bounds, coordinate bounds, LED schedule validation, clock
-validation, update window validation, local file validation, camera privacy exclusion and refresh
-after writes. Each mutation was checked with diff. The original source stayed unchanged.
+Each safety rule (levels, confirmations, hidden fields, text flattening, bounds, the room file mode, corrupt files) was
+broken on purpose, and a test failed each time.
 
-A review broke these rules again: the firmware install and auto-update levels, the install
-confirmation and version check, the diagnostics allow-list, release note flattening, the camera
-exclusion in room power, corrupt-file handling and the 0600 file mode. A test failed each time.
-The whole suite passes, including the socket tests.
+Checked on real devices on 2026-10-12: the diagnostics, clock and light reads on every kind of device in the home, and
+the camera light on a C225. `device_set_led` was refused without the phrase, turned the light on with it, and the light
+was set back. `firmware_check` on a P115 timed out after 20 seconds: the device asks the vendor cloud, which can be slow.
+Writes of names, the clock, firmware and rooms were not tried on real devices.

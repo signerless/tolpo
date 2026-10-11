@@ -83,3 +83,14 @@ def test_the_levels_0_to_4_are_accepted_from_the_environment_and_the_file(tmp_pa
     path.write_text(f"[policy]\ntier = {value}\n")
     assert load_config(str(path)).tier == expected
     assert load_config(str(tmp_path / "missing.toml")).tier == 1  # the default
+
+
+@pytest.mark.parametrize("literal", ["2.9", "true", "false", '"2"', "[1]"])
+def test_a_level_in_the_file_must_be_a_plain_whole_number(tmp_path, literal):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[policy]\ntier = {literal}\n")
+    if literal == '"2"':  # a quoted number is text, but a clearly numeric one is read as that number
+        assert load_config(str(path)).tier == 2
+        return
+    with pytest.raises(ValueError, match="0 to 4"):
+        load_config(str(path))

@@ -56,6 +56,16 @@ def _names(values) -> tuple[str, ...]:
     return tuple(v.strip() for v in values if isinstance(v, str) and v.strip())
 
 
+def _tier(value) -> int:
+    """The level from the file or the environment. A typo must not widen what an agent may do, so anything that is not a
+    plain whole number from 0 to 4 stops the server from starting (2.9 and true are not read as 2 and 1)."""
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        value = int(value.strip())
+    if type(value) is not int or not 0 <= value <= 4:
+        raise ValueError("policy.tier (or TOLPO_TIER) must be a whole number from 0 to 4")
+    return value
+
+
 def load_config(path: str | None = None) -> Config:
     """Read the config file, then let environment variables override it.
 
@@ -85,12 +95,7 @@ def load_config(path: str | None = None) -> Config:
         email, password = data.get("email", ""), data.get("password", "")
 
     snapshots = os.environ["TOLPO_SNAPSHOTS"].split(",") if "TOLPO_SNAPSHOTS" in os.environ else cameras.get("snapshots", ())
-    try:
-        tier = int(os.environ.get("TOLPO_TIER", policy.get("tier", 1)))
-    except (TypeError, ValueError):
-        tier = -1
-    if not 0 <= tier <= 4:  # a typo must not widen what an agent may do, so the server does not start
-        raise ValueError("policy.tier (or TOLPO_TIER) must be a whole number from 0 to 4")
+    tier = _tier(os.environ.get("TOLPO_TIER", policy.get("tier", 1)))
 
     return Config(
         email=os.environ.get("TAPO_EMAIL", email),

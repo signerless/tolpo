@@ -50,10 +50,8 @@ the parser also recognizes records carrying `lock_status`. No lock fixture is av
   protocol ranges. Boolean fields also accept integer 0 and 1. Invalid fields are dropped.
 - At most 32 locks are remembered. Datagrams over 4 KB and JSON deeper than 16 containers are ignored before
   decoding. Non-finite JSON numbers are rejected. Stored identifiers and owner hashes have fixed length bounds.
-- The area declares no device methods. Native lock methods such as `setLockStatus`, including batched calls,
-  are refused even with a method allowance and confirmation. A shared-catalog exception remains: `common.py`
-  declares SMART reads and level 2 `set_device_info` for `lock`. That does not match the audited lock protocol.
-  Removing `lock` from those shared declarations is required before claiming all lock methods are refused.
+- The area declares no device methods. Native lock methods such as `setLockStatus`, including batched calls, are
+  refused, even with a method allowance and confirmation. `areas/common.py` does not declare any method for locks.
 
 ### Where the records come from
 
@@ -146,12 +144,8 @@ When a lock is available, look at:
 - Whether the lock shows under `locks` or only under `other_locks`. The second may mean the owner hash rule or the
   record layout is wrong.
 
-## Wiring that needs a shared file
+## Not connected yet
 
-To feed `lock_state` from tolpo's own discovery, `registry.py` would pass python-kasa an `on_discovered_raw`
-callback that calls `lock.book_for(registry).note_raw(event)`, and call `note_unsupported(exc)` from its existing
-`on_unsupported` handler. This page does not edit `registry.py`.
-
-`areas/common.py` also needs to remove `lock` from `SMART_KINDS`. It currently permits `set_device_info` at level 2
-without confirmation and declares SMART reads that the lock audit does not support. This area does not edit that
-shared file.
+To feed `lock_state` from tolpo's own discovery, `registry.py` would pass python-kasa an `on_discovered_raw` callback
+that calls `lock.book_for(registry).note_raw(event)`, and call `note_unsupported(exc)` from its existing
+`on_unsupported` handler. That is not done, because there is no lock to test it against.
