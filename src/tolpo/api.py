@@ -58,6 +58,7 @@ def create_app(
     *,
     discover: bool = True,
     allowed_hosts: list[str] | None = None,
+    caller=None,
 ) -> FastAPI:
     reg = registry or Registry(cfg)
 
@@ -173,5 +174,9 @@ def create_app(
         settings = body.model_dump(exclude={"targets"})
         return await run_batch(reg, body.targets, lambda e: reg.set_light(e, **settings))
 
+    from .areas import AreaContext, load
+    from .calls import Caller
+
+    load(AreaContext(registry=reg, caller=caller or Caller(reg), api=app, auth=auth))
     return app
 

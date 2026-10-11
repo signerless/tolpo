@@ -38,8 +38,15 @@ async def test_llms_txt_lists_every_tool_the_server_has():
     reg, _ = make()
     async with Client(build_server(reg, discover=False)) as client:
         tools = {t.name for t in (await client.list_tools()).tools}
-    documented = set(re.findall(r"^- `(\w+)`:", LLMS, flags=re.M))
-    assert tools == documented, f"server has {sorted(tools)}, llms.txt documents {sorted(documented)}"
+    listed = set(re.findall(r"^- `(\w+)`:", LLMS, flags=re.M))
+    areas_doc = {
+        tool
+        for page in (ROOT / "docs/areas").glob("*.md")
+        if page.name != "README.md"
+        for tool in re.findall(r"^- `(\w+)`:", page.read_text(), flags=re.M)
+    }
+    assert listed <= tools, f"llms.txt documents tools the server does not have: {sorted(listed - tools)}"
+    assert tools <= listed | areas_doc, f"tools nobody documented (llms.txt or docs/areas/<area>.md): {sorted(tools - listed - areas_doc)}"
 
 
 def test_agents_md_names_only_files_that_exist():

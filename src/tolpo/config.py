@@ -37,6 +37,8 @@ class Config:
     camera_password: str = field(default="", repr=False)
     snapshots: tuple[str, ...] = ()
     ffmpeg: str = ""  # path to ffmpeg; empty means look for it on PATH
+    tier: int = 1  # the highest level of device method an agent may use; see policy.Tier
+    allow_methods: frozenset[str] = frozenset()  # single device methods allowed above `tier`
 
 
 def _warn_if_shared(path: Path) -> None:
@@ -57,7 +59,7 @@ def load_config(path: str | None = None) -> Config:
 
     Environment: TAPO_EMAIL, TAPO_PASSWORD, TOLPO_TOKEN, TOLPO_HOST,
     TOLPO_PORT, TOLPO_CONFIG, TOLPO_CREDENTIALS_FILE, TOLPO_CAMERA_USERNAME,
-    TOLPO_CAMERA_PASSWORD, TOLPO_SNAPSHOTS (camera names separated by commas), TOLPO_FFMPEG.
+    TOLPO_CAMERA_PASSWORD, TOLPO_SNAPSHOTS (camera names separated by commas), TOLPO_FFMPEG, TOLPO_TIER.
     """
     cfg_path = Path(path or os.environ.get("TOLPO_CONFIG") or DEFAULT_CONFIG_PATH).expanduser()
     raw: dict = {}
@@ -99,6 +101,8 @@ def load_config(path: str | None = None) -> Config:
         camera_password=os.environ.get("TOLPO_CAMERA_PASSWORD", cameras.get("password", "")),
         snapshots=_names(snapshots),
         ffmpeg=os.environ.get("TOLPO_FFMPEG", cameras.get("ffmpeg", "")),
+        tier=int(os.environ.get("TOLPO_TIER", policy.get("tier", 1))),
+        allow_methods=frozenset(policy.get("allow_methods", ())),
     )
 
 

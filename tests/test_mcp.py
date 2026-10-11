@@ -40,7 +40,7 @@ async def test_tools_and_safety_hints():
     reg, _ = make()
     async with client_for(reg) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
-    assert set(tools) == {"home_overview", "list_devices", "get_device", "camera_snapshot", "set_power", "set_light", "set_feature", "rescan"}
+    assert {"home_overview", "list_devices", "get_device", "camera_snapshot", "set_power", "set_light", "set_feature", "rescan"} <= set(tools)  # area modules add more
     for name in ("home_overview", "list_devices", "get_device", "camera_snapshot"):
         assert tools[name].annotations.read_only_hint is True
     assert tools["set_power"].annotations.destructive_hint is False

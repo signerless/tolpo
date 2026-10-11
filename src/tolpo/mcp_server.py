@@ -106,7 +106,7 @@ def _finish(items: list[BatchItem]) -> dict[str, Any]:
     return {"results": compact_batch(items)}
 
 
-def build_server(registry: Registry, *, discover: bool = True) -> MCPServer:
+def build_server(registry: Registry, *, discover: bool = True, caller=None) -> MCPServer:
     @asynccontextmanager
     async def lifespan(_: MCPServer):
         # Discovery takes ~20 s; start it in the background so the handshake is instant.
@@ -247,6 +247,10 @@ def build_server(registry: Registry, *, discover: bool = True) -> MCPServer:
         await registry.discover()
         return {"devices": len(registry.entries()), "problems": registry.problems}
 
+    from .areas import AreaContext, load
+    from .calls import Caller
+
+    load(AreaContext(registry=registry, caller=caller or Caller(registry), server=server, ready_for=ready_for, translated=_translated))
     return server
 
 

@@ -524,17 +524,26 @@ class Registry:
             raise Forbidden(f"{feature_id!r} cannot be changed on {entry.kind} devices: the owner's policy blocks it")
         return feat
 
+    async def _call_locked(self, entry: Entry, op: Callable[[], Awaitable[Any]]) -> Any:
+        """Run `op` with the device's lock already held, and turn the library's failures into ours."""
+        try:
+            return await asyncio.wait_for(op(), UPDATE_TIMEOUT)
+        except AuthenticationError as exc:
+            raise DeviceUnavailable(f"{entry.slug} rejected the account credentials") from exc
+        except TimeoutError as exc:
+            raise DeviceUnavailable(f"{entry.slug} did not answer in time") from exc
+        except KasaException as exc:
+            raise DeviceUnavailable(f"{entry.slug} reported an error: {exc}") from exc
+
+    async def guarded(self, entry: Entry, op: Callable[[], Awaitable[Any]]) -> Any:
+        """Run `op` on the device's connection, one at a time per hub or device, and return what it returns."""
+        async with entry.top.lock:
+            return await self._call_locked(entry, op)
+
     async def _run(self, entry: Entry, op: Callable[[], Awaitable[Any]]) -> None:
         top = entry.top
         async with top.lock:
-            try:
-                await asyncio.wait_for(op(), UPDATE_TIMEOUT)
-            except AuthenticationError as exc:
-                raise DeviceUnavailable(f"{entry.slug} rejected the account credentials") from exc
-            except TimeoutError as exc:
-                raise DeviceUnavailable(f"{entry.slug} did not answer in time") from exc
-            except KasaException as exc:
-                raise DeviceUnavailable(f"{entry.slug} reported an error: {exc}") from exc
+            await self._call_locked(entry, op)
             # The command already succeeded; a failed refresh only means stale readings.
             await self._update_locked(top)
 
