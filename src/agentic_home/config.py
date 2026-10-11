@@ -1,0 +1,102 @@
+"""Runtime configuration: an optional TOML file plus environment overrides."""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import logging
+import os
+import socket
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+DEFAULT_CONFIG_PATH = "~/.config/agentic-home/config.toml"
+
+
+@dataclass(frozen=True)
+class Config:
+    # Secrets are excluded from repr so they cannot leak through logs or tracebacks.
+    email: str = field(default="", repr=False)
+    password: str = field(default="", repr=False)
+    token: str = field(default="", repr=False)
+    host: str = "127.0.0.1"
+    port: int = 8765
+    subnets: tuple[str, ...] = ()
+    hosts: tuple[str, ...] = ()
+    discovery_interval: int = 600
+    sweep: bool = True
+    cache_ttl: float = 10.0
+    cache_file: str = "~/.cache/agentic-home/hosts.json"
+    allow_write: frozenset[str] = frozenset()
+
+
+def _warn_if_shared(path: Path) -> None:
+    if path.stat().st_mode & 0o077:
+        log.warning("%s holds credentials but other users can read it; run: chmod 600 %s", path, path)
+
+
+def load_config(path: str | None = None) -> Config:
+    """Read the config file, then let environment variables override it.
+
+    Environment: TAPO_EMAIL, TAPO_PASSWORD, AGENTIC_HOME_TOKEN, AGENTIC_HOME_HOST,
+    AGENTIC_HOME_PORT, AGENTIC_HOME_CONFIG, AGENTIC_HOME_CREDENTIALS_FILE.
+    """
+    cfg_path = Path(path or os.environ.get("AGENTIC_HOME_CONFIG") or DEFAULT_CONFIG_PATH).expanduser()
+    raw: dict = {}
+    if cfg_path.is_file():
+        raw = tomllib.loads(cfg_path.read_text())
+    tapo, server, discovery, policy = (raw.get(k, {}) for k in ("tapo", "server", "discovery", "policy"))
+
+    email, password = tapo.get("email", ""), tapo.get("password", "")
+    token = server.get("token", "")
+    if (password or token) and cfg_path.is_file():
+        _warn_if_shared(cfg_path)
+
+    # A JSON file {"email": ..., "password": ...} is read in place instead of copying the secret.
+    cred_file = os.environ.get("AGENTIC_HOME_CREDENTIALS_FILE") or tapo.get("credentials_file")
+    if cred_file and not (email and password):
+        cf = Path(cred_file).expanduser()
+        data = json.loads(cf.read_text())
+        _warn_if_shared(cf)
+        email, password = data.get("email", ""), data.get("password", "")
+
+    return Config(
+        email=os.environ.get("TAPO_EMAIL", email),
+        password=os.environ.get("TAPO_PASSWORD", password),
+        token=os.environ.get("AGENTIC_HOME_TOKEN", token),
+        host=os.environ.get("AGENTIC_HOME_HOST", server.get("host", "127.0.0.1")),
+        port=int(os.environ.get("AGENTIC_HOME_PORT", server.get("port", 8765))),
+        subnets=tuple(discovery.get("subnets", ())),
+        hosts=tuple(discovery.get("hosts", ())),
+        discovery_interval=int(discovery.get("interval_seconds", 600)),
+        sweep=bool(discovery.get("sweep", True)),
+        cache_ttl=float(server.get("cache_ttl_seconds", 10.0)),
+        cache_file=discovery.get("cache_file", "~/.cache/agentic-home/hosts.json"),
+        allow_write=frozenset(policy.get("allow_write", ())),
+    )
+
+
+def local_subnets() -> list[str]:
+    """The /24 of the interface that holds the default route. Override with `discovery.subnets`."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # A UDP connect only selects a route; no packet is sent.
+        probe.connect(("192.0.2.1", 9))
+        ip = probe.getsockname()[0]
+    except OSError:
+        return []
+    finally:
+        probe.close()
+    return [str(ipaddress.ip_network(f"{ip}/24", strict=False))]
+
+
+def is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False

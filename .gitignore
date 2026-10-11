@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+# credentials and local config never belong in the repo
+config.toml
+.env
+*.credentials.json
