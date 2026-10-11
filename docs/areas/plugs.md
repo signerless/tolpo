@@ -34,6 +34,9 @@ A date must be a valid `YYYY-MM-DD`. Countdown delays are 1 to 86400 seconds.
 That is a conservative tool limit, not a claimed device limit.
 An edit replaces the rule's supplied settings. The enable tool preserves the known fields of the existing rule.
 Use the returned `sum` and `start_index` to request another page. Enable-by-id searches at most 64 pages.
+Only schedule replies carry `sum` and `start_index` on the P115. Countdown and Away Mode replies are one page.
+A reply's top-level `enable` is the family switch. The P115 reported it false with no rules.
+UNVERIFIED: whether a new countdown runs while that switch is false. There is no countdown family switch tool.
 No cloud fallback is used. An unsupported method or unreachable device is reported as an error.
 
 Always-on after power loss can energize a heater. Select each socket deliberately.

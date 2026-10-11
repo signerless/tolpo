@@ -456,6 +456,7 @@ async def away(registry, caller, device, start, end, days, on_date=None, enabled
 
 async def delete_rule(registry, caller, device, kind, identifier):
     name = rule_name(kind)
+    # UNVERIFIED: remove_all plus a rule_list of ids is the candidate remove shape. remove_all is always false.
     return await write(registry, caller, device, f"remove_{name}_rules",
                        {"remove_all": False, "rule_list": [{"id": rule_id(identifier)}]})
 
@@ -466,6 +467,7 @@ async def enable_rule(registry, caller, device, kind, enabled, identifier=None):
     if identifier is None:
         if kind == "countdown":
             raise ValueError("countdown enable needs a rule id")
+        # UNVERIFIED: set_*_all_enable with a single enable flag; the reply's top-level enable is this switch.
         return await write(registry, caller, device, f"set_{name}_all_enable", {"enable": enabled})
     rule_id(identifier)
     entry = target(registry, device)
