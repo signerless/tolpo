@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
+import hmac
 import ipaddress
 import logging
 import os
@@ -457,6 +459,7 @@ def interface_name(value):
 class MacOSWifi:
     def __init__(self, interface, run=system_command):
         self.interface, self.run = interface_name(interface), run
+        self._joined = None
 
     async def current(self):
         text = await self.run("/usr/sbin/networksetup", "-getairportnetwork", self.interface)
@@ -466,16 +469,36 @@ class MacOSWifi:
         return text[len(prefix):]
 
     async def join(self, network):
+        self._joined = network
         await self.run("/usr/sbin/networksetup", "-setairportnetwork", self.interface, network)
 
     async def restore(self, previous):
         # The OS must remember credentials for the previous network.
-        await self.join(previous)
-        if await self.current() != previous:
-            raise RegistryError("The previous host Wi-Fi network was not restored")
+        restored = False
+        try:
+            await self.run("/usr/sbin/networksetup", "-setairportnetwork", self.interface, previous)
+            if await self.current() != previous:
+                raise RegistryError("The previous host Wi-Fi network was not restored")
+            restored = True
+        finally:
+            # Joining adds the open setup network to the preferred list, so the
+            # host would join any later network with that name. Remove it.
+            # UNVERIFIED on a real Mac: the exact preferred-list behavior.
+            joined, self._joined = self._joined, None
+            if joined is not None:
+                try:
+                    await self.run("/usr/sbin/networksetup", "-removepreferredwirelessnetwork", self.interface, joined)
+                except Exception:
+                    if restored:
+                        raise RegistryError("Host Wi-Fi restored, but the setup network stayed in its saved networks") from None
 
 
 class LinuxWifi:
+    # A dedicated profile that never connects on its own. `nmcli device wifi
+    # connect` would save an auto-connecting open profile for the setup network.
+    # UNVERIFIED on a real Linux host: the nmcli argument forms below.
+    PROFILE = "tolpo-softap"
+
     def __init__(self, interface, run=system_command):
         self.interface, self.run = interface_name(interface), run
 
@@ -485,14 +508,33 @@ class LinuxWifi:
             raise RegistryError("The host must have a saved Wi-Fi connection before provisioning")
         return value
 
+    async def _drop_profile(self):
+        await self.run("nmcli", "connection", "delete", "id", self.PROFILE)
+
     async def join(self, network):
-        # network is one argv value. A leading dash must never become an option.
-        await self.run("nmcli", "device", "wifi", "connect", network, "ifname", self.interface)
+        # A profile left by an interrupted run is replaced, never reused.
+        with contextlib.suppress(RegistryError):
+            await self._drop_profile()
+        # network is one argv value after its keyword, never an option.
+        await self.run(
+            "nmcli", "connection", "add", "type", "wifi", "ifname", self.interface,
+            "con-name", self.PROFILE, "autoconnect", "no", "ssid", network,
+        )
+        await self.run("nmcli", "connection", "up", "id", self.PROFILE, "ifname", self.interface)
 
     async def restore(self, previous):
-        await self.run("nmcli", "connection", "up", "uuid", previous, "ifname", self.interface)
-        if await self.current() != previous:
-            raise RegistryError("The previous host Wi-Fi connection was not restored")
+        restored = False
+        try:
+            await self.run("nmcli", "connection", "up", "uuid", previous, "ifname", self.interface)
+            if await self.current() != previous:
+                raise RegistryError("The previous host Wi-Fi connection was not restored")
+            restored = True
+        finally:
+            try:
+                await self._drop_profile()
+            except Exception:
+                if restored:
+                    raise RegistryError("Host Wi-Fi restored, but the setup profile could not be removed") from None
 
 
 def host_wifi(interface):
@@ -601,6 +643,9 @@ async def _host_call(host, operation, *args):
         return await getattr(host, operation)(*args)
     except asyncio.CancelledError:
         raise
+    except RegistryError as exc:
+        # Our host adapters write these messages; they hold no command output.
+        raise RegistryError(f"Host Wi-Fi {operation} failed: {exc}") from None
     except Exception:
         raise RegistryError(f"Host Wi-Fi {operation} failed") from None
 
