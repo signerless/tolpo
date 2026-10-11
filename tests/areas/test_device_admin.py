@@ -483,7 +483,11 @@ async def test_every_tool_mcp_schema_happy_path_and_doc(house, mcp, state):
     async with mcp(reg, caller) as client:
         definitions = {t.name: t for t in (await client.list_tools()).tools}
         names = set(n for n, _ in cases)
-        assert set(n for n in definitions if n.startswith(("device_", "firmware_", "room_", "group_"))) == names
+        # Compare with what this module registers, so other areas' tools after a merge do not break the check.
+        registered = []
+        stub = SimpleNamespace(tool=lambda **_: lambda fn: registered.append(fn.__name__) or fn)
+        admin.tools(stub)
+        assert set(registered) == names and names <= set(definitions)
         for name, args in cases:
             assert f"- `{name}`:" in doc
             assert definitions[name].description
