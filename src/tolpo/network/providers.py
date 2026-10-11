@@ -374,10 +374,17 @@ class Linux(Provider):
         data = []
         for family in ("-4", "-6"):
             data.extend(rows(json.loads(await self.runner(("ip", "-j", family, "neigh", "show")))))
-        identities = {mac(r["lladdr"]) for r in data if r.get("dst") in scope and r.get("lladdr")}
-        return [client_from([r["dst"] for r in data if r.get("lladdr") and mac(r["lladdr"]) == identity],
-                            mac=identity, network=text(next(r.get("dev", "") for r in data if r.get("dst") in scope and mac(r.get("lladdr", "")) == identity)))
-                for identity in identities]
+        # Skip incomplete entries and non-unicast or non-Ethernet link addresses instead of failing on one odd row.
+        valid = []
+        for r in data:
+            try:
+                valid.append((ip(r["dst"]), mac(str(r["lladdr"])), str(r.get("dev", ""))))
+            except (KeyError, NetworkError):
+                continue
+        identities = {identity for dst, identity, _ in valid if dst in scope}
+        return [client_from([dst for dst, other, _ in valid if other == identity], mac=identity,
+                            network=text(next(dev for dst, other, dev in valid if dst in scope and other == identity)))
+                for identity in sorted(identities)]
 
     async def flows(self, client, since, until, live=True):
         try:

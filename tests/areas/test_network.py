@@ -568,6 +568,18 @@ async def test_linux_read_contract_file_fallback_and_unsupported_upnp():
 
 
 @pytest.mark.anyio
+async def test_linux_neighbors_skip_incomplete_and_odd_link_addresses():
+    kernel = FakeLinux()
+    kernel.neighbors = [{"dst": ADDR, "dev": "iot", "state": ["FAILED"]},
+                        {"dst": "192.0.2.77", "lladdr": "00:00:00:00:00:00", "dev": "iot"},
+                        {"dst": "192.0.2.78", "lladdr": "01:00:5e:00:00:01", "dev": "iot"}] + kernel.neighbors
+    provider = Linux(cfg("linux"), runner=kernel.runner, reader=kernel.reader)
+    found = await provider.clients((ADDR,))
+    assert len(found) == 1 and found[0].mac == IDENTITY and found[0].addresses == CLIENT.addresses
+    assert found[0].network == "iot"
+
+
+@pytest.mark.anyio
 async def test_linux_plan_apply_verify_dual_stack_identity_mask_and_owned_rollback(make_house, tmp_path):
     service, kernel, entry, now = writable(make_house, tmp_path)
     kernel.state["nftables"] = [{"table": {"family": "inet", "name": "owner", "comment": "owner"}}]
