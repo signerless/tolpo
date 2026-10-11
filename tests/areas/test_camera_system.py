@@ -313,6 +313,46 @@ async def test_statistics_wire_and_hidden_fields(make_house):
         await area.battery_statistics(reg, caller, "hallway-cam", 1)
 
 
+async def test_statistics_as_a_real_doorbell_answers_without_the_module_around_them(make_house):
+    """Checked on a D230: the answer is {"statistic": {...}}, with no "battery" around it."""
+    reg, caller = battery_house(make_house, 0)
+    caller.respond("getBatteryStatistic", {"statistic": {"day_num": 1, "day": [{"time": "2026-10-11", "bat_per": 71, "bat_usage": 3,
+                                                                                "pir_wakeup_with_event": 2, "hour_runtime": [0] * 24, "ssid": "SECRET"}]}})
+    result = await area.battery_statistics(reg, caller, "hallway-cam", 7)
+    assert result["statistics"]["day"][0]["bat_per"] == 71 and "SECRET" not in str(result)
+    caller.respond("getBatteryStatistic", {"something_else": {"day_num": 1}})
+    with pytest.raises(DeviceUnavailable, match="unexpected response shape"):
+        await area.battery_statistics(reg, caller, "hallway-cam", 7)
+
+
+async def test_charging_privacy_is_read_from_getChargingMode_as_a_real_battery_camera_answers(make_house):
+    """A C465 and a C610 refuse getChargingPrivacyMode and answer getChargingMode with both fields."""
+    reg, caller = battery_house(make_house, 0)
+    caller.respond("getChargingMode", {"battery": {"charging_mode": {"charging_privacy_mode": "on", "adapter_mode": "mains\nonly"}}})
+    result = await area.read_setting(reg, caller, "hallway-cam", "charging_privacy")
+    assert result == {"device": "hallway-cam", "charging_privacy": {"charging_privacy_mode": "on"}}
+    assert caller.sent[-1][1:] == ("getChargingMode", {"battery": {"name": ["charging_mode"]}})
+    assert "getChargingPrivacyMode" not in caller.methods_sent()
+    assert (await area.read_setting(reg, caller, "hallway-cam", "charging"))["charging"] == {"adapter_mode": "mains only", "charging_privacy_mode": "on"}
+
+
+async def test_changing_automatic_updates_does_not_depend_on_a_capability_read_the_cameras_refuse(make_house):
+    """A C225, a C465 and a C610 refuse getFirmwareCapability. The configuration read decides instead."""
+    from kasa.exceptions import DeviceError, SmartErrorCode
+
+    reg, caller = battery_house(make_house, 4)
+    caller.respond("getAppComponentList", {"app_component": {"app_component_list": [{"name": "firmware", "version": 1}]}})
+    caller.respond("getFirmwareCapability", DeviceError("x", error_code=SmartErrorCode.PROTOCOL_FORMAT_ERROR))
+    caller.respond("getFirmwareAutoUpgradeConfig", {"auto_upgrade": {"common": {"enabled": "off", "time": "03:00", "random_range": "120"}}})
+    result = await area.system_change(reg, caller, "hallway-cam", "auto_update", True, "setFirmwareAutoUpgradeConfig hallway-cam")
+    assert caller.sent[-1][1] == "setFirmwareAutoUpgradeConfig"
+    assert caller.sent[-1][2]["auto_upgrade"]["common"]["enabled"] == "on"
+    # a camera that answers the capability read and says no is still refused
+    caller.respond("getFirmwareCapability", {"auto_upgrade": {"auto_upgrade_support": "0"}})
+    with pytest.raises(BadRequest, match="does not report automatic firmware update support"):
+        await area.system_change(reg, caller, "hallway-cam", "auto_update", True, "setFirmwareAutoUpgradeConfig hallway-cam")
+
+
 def audio_house(make_house, tier=4):
     reg, caller = house(make_house, tier, [*IMAGE_COMPONENTS, "audio", "audioCapability", "voiceEnhancement"])
     caller.respond("getAudioConfig", {"audio_config": {"microphone": {"volume": "50", "encode_type": "g711", "channels": "1", "bitrate": "64", "sampling_rate": "8000", "password": "SECRET"}, "speaker": {"volume": "40"}}})

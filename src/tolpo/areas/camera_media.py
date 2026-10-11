@@ -354,10 +354,10 @@ async def recordings_of_day(registry: Registry, caller: Any, entry: Entry, day: 
     segments: list[dict[str, Any]] = []
     more = False
     for first in range(0, MAX_SEGMENTS, PAGE):
-        # UNVERIFIED: older firmware may only answer searchVideoOfDay, which needs a user id this area does not read.
+        # Checked on a C465 and a C610: without an `id` the camera answers INTERNAL_UNKNOWN_ERROR, with `id: 0` it lists the day.
         raw = await caller.call(
             entry, "searchVideoWithUTC",
-            {"playback": {"search_video_with_utc": {"channel": 0, "start_time": start, "end_time": end, "start_index": first, "end_index": first + PAGE - 1}}},
+            {"playback": {"search_video_with_utc": {"channel": 0, "id": 0, "start_time": start, "end_time": end, "start_index": first, "end_index": first + PAGE - 1}}},
         )
         items, section = _first_list((raw or {}).get("playback"), "search_video_results")
         segments += [s for s in (_segment(i) for i in items) if s]

@@ -63,9 +63,10 @@ Clip times accept 0 to 3600 seconds, with a clip length of at least 1. The camer
 Working mode sends `follow_config=true`. Custom force parameters, charging adapter mode and PIR tuning are left out.
 No tool wakes a sleeping camera. A camera that does not answer on the LAN may need BLE.
 
-UNVERIFIED: charging privacy is switched with `setChargingMode` and the field `charging_privacy_mode`, as the app
-does. The read field of `getChargingPrivacyMode` may be `status` (audit) or `enabled`; both are kept.
-Check on the C465 or C610 and the D230: capability ranges, working mode, statistics wrappers and charging privacy.
+Checked on a C465 and a C610: charging privacy is read with `getChargingMode` (field `charging_privacy_mode`, next to
+`adapter_mode`). Both cameras refuse `getChargingPrivacyMode`, so tolpo does not use it. UNVERIFIED: it is switched with
+`setChargingMode`, as the app does. No write was tried.
+Check on the C465 or C610 and the D230: capability ranges, working mode and the charging privacy write.
 
 ## Audio
 
@@ -106,16 +107,18 @@ Reboot, reset and firmware writes try a state refresh. An outage during that ref
 that says the command was accepted.
 Hub-managed cameras read their components through `getChildDeviceComponentList` on the parent hub.
 
-UNVERIFIED: `getPatrolInfo` is read under `patrol.get_patrol_info`, `getBatteryStatistic` under
-`battery.statistic`, and `getFirmwareCapability` as flat `auto_upgrade` fields. Their requests come from the
-app's request builders. Their responses need fixtures. Check on hardware: reboot, reset and firmware commands
-and the connection afterwards, auto-update support flags and UPnP mapping modes.
+Checked on a real D230: `getBatteryStatistic` answers `{"statistic": {"day_num", "day": [...]}}` with no `battery` around
+it, and tolpo reads that shape (it still accepts the wrapped one).
+UNVERIFIED: `getPatrolInfo` is read under `patrol.get_patrol_info`. A C225, a C465 and a C610 refuse
+`getFirmwareCapability` with PROTOCOL_FORMAT_ERROR for every request shape tried, so changing automatic updates does not
+wait for it: it reads the current update configuration instead, and a camera that does answer the capability read with "no"
+is still refused. Check on hardware: reboot, reset and firmware commands and the connection afterwards, and UPnP mapping modes.
 
 Unexpected or rejected responses raise an error naming the device and method. Raw device error text is hidden.
 
 ## Declared device methods
 
-- Level 0: `getAudioConfig`, `getBatteryCapability`, `getBatteryOperatingMode`, `getBatteryStatistic`, `getBatteryStatus`, `getChargingMode`, `getChargingPrivacyMode`, `getChildDeviceComponentList`, `getClipsConfig`, `getClockStatus`, `getCloudConfig`, `getConnectionType`, `getCoverConfig`, `getCoverRegion`, `getFirmwareAutoUpgradeConfig`, `getFirmwareCapability`, `getFirmwareUpdateStatus`, `getImageCapability`, `getImageStyleCapability`, `getImageStyleConfig`, `getLedStatus`, `getLensMaskConfig`, `getMotorAngleRange`, `getNightVisionCapability`, `getNightVisionModeConfig`, `getOsd`, `getOsdCapability`, `getPatrolInfo`, `getPatrolStatus`, `getPirSensitivity`, `getPowerMode`, `getPresetConfig`, `getReboot`, `getRotationStatus`, `getTargetTrackConfig`, `getThirdAccount`, `getThirdPartyCompatibility`, `getTimezone`, `getUpnpInfo`, `getVideoCapability`, `getVoiceEnhancementConfig`, `getWakeUpConfig`.
+- Level 0: `getAudioConfig`, `getBatteryCapability`, `getBatteryOperatingMode`, `getBatteryStatistic`, `getBatteryStatus`, `getChargingMode`, `getChildDeviceComponentList`, `getClipsConfig`, `getClockStatus`, `getCloudConfig`, `getConnectionType`, `getCoverConfig`, `getCoverRegion`, `getFirmwareAutoUpgradeConfig`, `getFirmwareCapability`, `getFirmwareUpdateStatus`, `getImageCapability`, `getImageStyleCapability`, `getImageStyleConfig`, `getLedStatus`, `getLensMaskConfig`, `getMotorAngleRange`, `getNightVisionCapability`, `getNightVisionModeConfig`, `getOsd`, `getOsdCapability`, `getPatrolInfo`, `getPatrolStatus`, `getPirSensitivity`, `getPowerMode`, `getPresetConfig`, `getReboot`, `getRotationStatus`, `getTargetTrackConfig`, `getThirdAccount`, `getThirdPartyCompatibility`, `getTimezone`, `getUpnpInfo`, `getVideoCapability`, `getVoiceEnhancementConfig`, `getWakeUpConfig`.
 - Level 1: `checkFirmwareVersionByCloud`, `cruiseMove`, `cruiseStop`, `manualCalibrate`, `stopMove`.
 - Level 2: `addMotorPostion`, `addPatrol`, `deletePatrol`, `deletePreset`, `editPatrol`, `rebootDevice`, `setBatteryOperatingMode`, `setClipsConfig`, `setHDR`, `setImageStyleConfig`, `setMicrophoneVolume`, `setNightVisionModeConfig`, `setOsd`, `setPatrolStatus`, `setPowerMode`, `setReboot`, `setRecordAudio`, `setRotationStatus`, `setSpeakerVolume`, `setTargetTrackConfig`, `setTimezone`, `setVoiceEnhancement`, `setWakeUpConfig`.
 - Level 3: `setAccountEnabled`, `setChargingMode`, `setCoverConfig`, `setLedStatus`, `setLensMaskConfig`, `setUpnpInfo`.

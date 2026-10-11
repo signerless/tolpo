@@ -84,9 +84,12 @@ Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`
 
 - The answer of `getCircularRecordingConfig` (`{"harddisk_manage": {"harddisk": {"loop": "on"}}}` expected) and the
   shape of `setCircularRecordingConfig`, `setRecordPlan` and `formatSdCard` on a real camera.
-- The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList`: the list names and the item
-  fields. The parser reads any list in the `playback` section and the fields the app's own classes name. Older firmware
-  may answer only `searchVideoOfDay`, which needs a user id; tolpo does not send it.
+- The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList` were checked on a C465, a C610 and
+  a C225. `searchVideoWithUTC` needs `"id": 0` in its request: without it the camera answers INTERNAL_UNKNOWN_ERROR. The
+  answer is `search_video_results`, a list of `{"search_video_results_N": {startTime, endTime, channel, video_type}}`,
+  with `to_be_continued`. `searchDetectionList` answers `search_detection_list` with flat rows (`start_time`, `end_time`,
+  `alarm_type`, and a number `events_1`), `total_num` and `to_be_continued`; the rows carry no `file_id`. Older firmware
+  may answer only `searchVideoOfDay`; tolpo does not send it.
 - The meaning of the record plan codes: 1 continuous, 2 events, 3 the low frame rate mode, from the app's code. The
   owner's cameras show 2 and 3, but which behavior each gives was not checked.
 - The event type numbers: taken from the app's cloud list (6 person, 8 vehicle, 2 motion...). That the camera uses the

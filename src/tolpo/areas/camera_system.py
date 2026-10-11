@@ -79,9 +79,12 @@ def _section(result, module, section):
     if not isinstance(result, dict):
         raise BadRequest("The camera returned an unexpected response shape")
     block = result.get(module)
-    if not isinstance(block, dict) or section not in block:
-        raise BadRequest("The camera returned an unexpected section shape")
-    return block[section]
+    if isinstance(block, dict) and section in block:
+        return block[section]
+    # Seen on a real doorbell: getBatteryStatistic answers {"statistic": ...} and leaves the module out.
+    if module not in result and isinstance(result.get(section), dict):
+        return result[section]
+    raise BadRequest("The camera returned an unexpected section shape")
 
 
 def _rejected(value):
@@ -434,9 +437,10 @@ READS.update({
     "wake_up": Read("getWakeUpConfig", "wakeUp", "wake_up", "config", ("wake_up_type",)),
     "pir": Read("getPirSensitivity", "pir", "pir", "config", ("sensitivity",)),
     "charging": Read("getChargingMode", "battery", "battery", "charging_mode", ("adapter_mode", "charging_privacy_mode")),
-    # UNVERIFIED: the audit names the field `status`; `enabled` is kept in case a model uses it. No fixture yet.
-    "charging_privacy": Read("getChargingPrivacyMode", "battery", "battery", "charging_privacy_mode", ("status", "enabled")),
-    # UNVERIFIED: statistic response nesting needs a camera or doorbell fixture.
+    # getChargingPrivacyMode is refused by a C465 and a C610 (PROTOCOL_FORMAT_ERROR). The app reads this switch from
+    # getChargingMode, as it sets it with setChargingMode: the C465 and C610 answer with `charging_privacy_mode` and `adapter_mode`.
+    "charging_privacy": Read("getChargingMode", "battery", "battery", "charging_mode", ("charging_privacy_mode",)),
+    # Checked on a D230: the answer is {"statistic": {"day_num", "day": [...]}}, without the module around it.
     "statistics": Read("getBatteryStatistic", "batCamStatistics", "battery", "statistic", ("day", "day_num", "time", "bat_per", "bat_usage", "day_runtime", "hour_runtime", "pir_wakeup_with_event", "pir_only_wakeup", "solar_charge_cap", "always_on_status", "bat_status")),
 })
 WRITES.update({
@@ -561,7 +565,8 @@ READS.update({
     "reboot_schedule": Read("getReboot", "reboot", "timing_reboot", "reboot", ("enabled", "day", "time", "random_range")),
     "firmware": Read("getCloudConfig", "firmware", "cloud_config", "upgrade_info", ("fw_download_progress", "fw_download_status", "fw_verify_status", "connect_status", "reconnect_time")),
     "firmware_status": Read("getFirmwareUpdateStatus", "firmware", "cloud_config", "upgrade_status", ("status", "lastUpgradingSuccess")),
-    # UNVERIFIED: flat firmware capability response nesting needs a fixture.
+    # UNVERIFIED: a C225, a C465 and a C610 refuse this read with PROTOCOL_FORMAT_ERROR for every request shape tried
+    # (the app's own shape, JSON null, an empty string, an empty object, a name list and no parameters).
     "firmware_capability": Read("getFirmwareCapability", "firmware", "auto_upgrade", "*", ("auto_upgrade_support", "upgrade_process_support"), "flat"),
     "auto_update": Read("getFirmwareAutoUpgradeConfig", "firmware", "auto_upgrade", "common", ("enabled", "time", "random_range")),
 })
@@ -636,8 +641,11 @@ async def system_change(registry, caller, device, setting, value=None, confirm=N
         method, section = ("checkFirmwareVersionByCloud", "check_fw_version") if setting == "firmware_check" else ("startFirmwareUpgrade", "fw_download")
         return await write(registry, caller, entry, method, "cloud_config", section, "null", f"{setting} requested", confirm)
     if setting == "auto_update":
-        cap = await capability(caller, entry, found, "firmware_capability")
-        if cap.get("auto_upgrade_support") not in ("1", "on", True):
+        try:
+            cap = await capability(caller, entry, found, "firmware_capability")
+        except DeviceUnavailable:
+            cap = None  # the cameras tried refuse this read; the current configuration read below is the real check
+        if cap is not None and cap.get("auto_upgrade_support") not in ("1", "on", True):
             raise BadRequest(f"{entry.slug} does not report automatic firmware update support")
         current = await raw_read(caller, entry, READS["auto_update"])
         if not isinstance(current, dict) or "time" not in current or "random_range" not in current:

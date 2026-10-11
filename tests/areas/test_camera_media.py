@@ -310,7 +310,7 @@ async def test_a_days_recordings_are_read_page_by_page(make_house, mcp):
                                   "start_ts": start + 60, "seconds": 30, "mode": "events"}
     assert out["segments"][0]["mode"] == "continuous"
     (_, _, first), (_, _, second) = caller.sent
-    assert first["playback"]["search_video_with_utc"] == {"channel": 0, "start_time": start, "end_time": start + 86399, "start_index": 0, "end_index": 99}
+    assert first["playback"]["search_video_with_utc"] == {"channel": 0, "id": 0, "start_time": start, "end_time": start + 86399, "start_index": 0, "end_index": 99}
     assert second["playback"]["search_video_with_utc"]["start_index"] == 100
 
 
