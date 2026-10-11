@@ -53,3 +53,34 @@ jobs:
           uv venv --python 3.13 /tmp/clean
           uv pip install --python /tmp/clean/bin/python dist/*.whl
           /tmp/clean/bin/tolpo --help
+
+  npm:
+    name: npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: The launcher tests pass
+        run: npm test
+      - name: The tarball has what the launcher needs and no compiled caches
+        run: |
+          npm pack --dry-run --json > /tmp/pack.json
+          node -e '
+            const files = JSON.parse(require("fs").readFileSync("/tmp/pack.json"))[0].files.map((f) => f.path);
+            const need = ["bin/tolpo.js", "pyproject.toml", "LICENSE", "README.md", "src/tolpo/cli.py", "src/tolpo/mcp_server.py"];
+            const missing = need.filter((f) => !files.includes(f));
+            const bad = files.filter((f) => /__pycache__|\.pyc$|^tests\/|^\.github\//.test(f));
+            if (missing.length || bad.length) { console.error({ missing, bad }); process.exit(1); }
+            console.log(files.length + " files, as expected");
+          '
+      - name: The packed package installs and starts
+        run: |
+          npm pack --silent --pack-destination /tmp
+          mkdir /tmp/consumer
+          cd /tmp/consumer
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund /tmp/tolpo-*.tgz
+          ./node_modules/.bin/tolpo --help

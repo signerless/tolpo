@@ -1,0 +1,42 @@
+{
+  "name": "tolpo",
+  "version": "0.1.0",
+  "description": "Local-first MCP server and HTTP API that let AI agents read and control TP-Link Tapo smart-home devices",
+  "license": "MIT",
+  "author": "signerless",
+  "homepage": "https://github.com/signerless/tolpo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/signerless/tolpo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/signerless/tolpo/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tapo",
+    "tp-link",
+    "smart-home",
+    "home-automation",
+    "ai-agents",
+    "local-first"
+  ],
+  "mcpName": "io.github.signerless/tolpo",
+  "bin": {
+    "tolpo": "bin/tolpo.js"
+  },
+  "files": [
+    "bin/",
+    "src/tolpo/*.py",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

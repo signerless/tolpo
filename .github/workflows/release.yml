@@ -1,5 +1,9 @@
 name: Release
 
+# Pushing a version tag verifies the release: the tag must match the versions in the repo, and both the
+# Python code and the npm launcher must pass their tests. Publishing to npm is done by hand by the owner.
+# Publishing to PyPI only runs if the repository variable PUBLISH_PYPI is set to "true".
+
 on:
   push:
     tags: ["v*"]
@@ -13,17 +17,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - uses: astral-sh/setup-uv@v10.3.0
       - name: The tag must match the versions in the repo
         run: python3 scripts/check_release.py "$GITHUB_REF_NAME"
-      - name: Run the tests
+      - name: Run the Python tests
         run: |
           uv venv --python 3.13 .venv
           uv pip install --python .venv/bin/python -e ".[dev]"
           .venv/bin/python -m pytest -q
-      - name: Build the package
+      - name: Run the launcher tests
+        run: npm test
+      - name: Check that the npm package packs
+        run: npm pack --dry-run
+      - name: Build the Python package
         run: uv build
-      - name: Check the package metadata
+      - name: Check the Python package page
         run: uvx twine check --strict dist/*
       - uses: actions/upload-artifact@v7
         with:
@@ -33,6 +44,7 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
+    if: ${{ vars.PUBLISH_PYPI == 'true' }}
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -46,31 +58,3 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
-
-  publish-mcp-registry:
-    name: Publish to the MCP registry
-    needs: publish-pypi
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write # the registry checks the GitHub identity of this workflow
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - name: Wait until PyPI serves the new version with the ownership marker
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          for _ in $(seq 1 30); do
-            if curl -sf "https://pypi.org/pypi/tolpo/${VERSION}/json" | grep -q "mcp-name: io.github.signerless/tolpo"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "PyPI did not serve version ${VERSION} with the marker in time" >&2
-          exit 1
-      - name: Install mcp-publisher
-        run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
-      - name: Authenticate to the MCP registry
-        run: ./mcp-publisher login github-oidc
-      - name: Publish the server
-        run: ./mcp-publisher publish

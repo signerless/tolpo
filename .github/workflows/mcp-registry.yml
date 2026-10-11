@@ -1,0 +1,40 @@
+name: Publish to the MCP registry
+
+# Run this by hand from the Actions tab after the npm package is published. It waits until npm serves the
+# version with the ownership marker, then asks the registry to list the server named in server.json.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish server.json
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the registry checks the GitHub identity of this workflow
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: The versions in the repo agree
+        run: python3 scripts/check_release.py
+      - name: Wait until npm serves this version with the ownership marker
+        run: |
+          VERSION=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+          for _ in $(seq 1 30); do
+            if curl -sf "https://registry.npmjs.org/tolpo/${VERSION}" | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("mcpName") == "io.github.signerless/tolpo" else 1)'; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "npm did not serve tolpo@${VERSION} with the marker in time. Publish the package first." >&2
+          exit 1
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Authenticate to the MCP registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish the server
+        run: ./mcp-publisher publish

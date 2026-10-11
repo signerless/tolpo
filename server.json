@@ -10,10 +10,10 @@
   "version": "0.1.0",
   "packages": [
     {
-      "registryType": "pypi",
+      "registryType": "npm",
       "identifier": "tolpo",
       "version": "0.1.0",
-      "runtimeHint": "uvx",
+      "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
       },
