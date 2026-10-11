@@ -61,6 +61,13 @@ Only the owner of the npm account can do this.
    `io.github.signerless/tolpo`. In the Actions tab, run the workflow "Publish to the MCP registry". It waits
    until npm serves the new version, then publishes `server.json`.
 
+## Container image
+
+The image `ghcr.io/signerless/tolpo` is built and smoke tested for amd64 and arm64 by the Container workflow on
+every change to the image. Pushing a version tag publishes it as `X.Y.Z` and `latest`. To publish without a new
+tag, run the workflow by hand from `main`: it uses the version in `src/tolpo/__init__.py`. The label
+`org.opencontainers.image.source` in the Dockerfile is what links the package to this repository.
+
 ## PyPI, later
 
 The Python package is already built and checked on every push, so PyPI can be switched on whenever you want.

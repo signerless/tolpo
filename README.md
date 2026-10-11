@@ -89,6 +89,36 @@ tolpo is a Python program. The npm package carries the Python code and runs it w
 downloads about forty Python packages and takes longer than later runs. If an AI client gives up waiting, run
 `npx -y tolpo --help` once and start the client again.
 
+### With Docker
+
+For a machine that stays on, such as a Raspberry Pi or a Linux home server. The image is public, so pulling it
+needs no login, and it is built for amd64 and arm64.
+
+Keep the credentials in a file that only you can read, and pass it with `--env-file`:
+
+```bash
+printf 'TAPO_EMAIL=you@example.com\nTAPO_PASSWORD=your-password\n' > ~/.tolpo.env
+chmod 600 ~/.tolpo.env
+
+docker run --rm -i --network host --env-file ~/.tolpo.env ghcr.io/signerless/tolpo
+```
+
+That runs the MCP server over stdio. For the HTTP API, add a token, because it is no longer bound to loopback:
+
+```bash
+echo "TOLPO_TOKEN=$(openssl rand -hex 24)" >> ~/.tolpo.env
+
+docker run -d --name tolpo --restart unless-stopped --network host --env-file ~/.tolpo.env \
+  ghcr.io/signerless/tolpo serve --host 0.0.0.0
+```
+
+`--network host` lets the container find devices by UDP broadcast, and it only works on Linux. Docker Desktop on
+macOS and Windows runs containers in a virtual machine that cannot see your devices that way, so use the npx
+install there.
+
+CI builds the image for both architectures and checks the MCP handshake inside it. Finding real devices from
+inside a container has not been tried yet.
+
 ### From source
 
 ```bash
