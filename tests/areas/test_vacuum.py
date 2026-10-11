@@ -462,7 +462,7 @@ async def test_mcp_schema_roundtrip_and_errors(house, mcp):
         denied = await client.call_tool("vacuum_locate", {"device": "floor-robot"})
         assert denied.is_error and "playSelectAudio floor-robot" in denied.content[0].text
         caller.sent.clear()
-        for name, args in (("vacuum_preferences", {"suction": True}), ("vacuum_preferences", {"suction": "2"}), ("vacuum_preferences", {"suction": 6}), ("vacuum_preferences", {}), ("vacuum_volume", {"volume": -1}), ("vacuum_clean_rooms", {"map_id": 7, "room_ids": [True]}), ("vacuum_zones", {"map_id": 7, "zones": [{**ZONE, "token": "hidden"}]})):
+        for name, args in (("vacuum_preferences", {"suction": True}), ("vacuum_preferences", {"suction": "2"}), ("vacuum_preferences", {"suction": 6}), ("vacuum_preferences", {}), ("vacuum_preset", {"map_id": 7, "preset_id": 2**31}), ("vacuum_task_group", {"group_id": 2**31}), ("vacuum_schedules", {"start_index": 2**31}), ("vacuum_volume", {"volume": -1}), ("vacuum_clean_rooms", {"map_id": 7, "room_ids": [True]}), ("vacuum_zones", {"map_id": 7, "zones": [{**ZONE, "token": "hidden"}]})):
             result = await client.call_tool(name, {"device": "floor-robot", **args})
             assert result.is_error
         assert caller.sent == []

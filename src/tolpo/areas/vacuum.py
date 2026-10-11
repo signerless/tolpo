@@ -603,12 +603,12 @@ def tools(ctx):
         return await _invoke(ctx, device, clean_start, 4, map_id, areas=[z.model_dump() for z in zones])
 
     @ctx.tool(title="Start saved cleaning preset", tier=Tier.CONTROL)
-    async def vacuum_preset(device: DeviceRef, map_id: MapId, preset_id: Annotated[int, Field(strict=True, ge=0, description="Existing customization rule id")]) -> dict[str, Any]:
+    async def vacuum_preset(device: DeviceRef, map_id: MapId, preset_id: Annotated[int, Field(strict=True, ge=0, le=2**31 - 1, description="Existing customization rule id")]) -> dict[str, Any]:
         """Start an existing custom preset on its map."""
         return await _invoke(ctx, device, clean_start, 5, map_id, preset_id=preset_id)
 
     @ctx.tool(title="Start saved task group", tier=Tier.CONTROL)
-    async def vacuum_task_group(device: DeviceRef, group_id: Annotated[int, Field(strict=True, ge=0, description="Existing saved task group id")]) -> dict[str, Any]:
+    async def vacuum_task_group(device: DeviceRef, group_id: Annotated[int, Field(strict=True, ge=0, le=2**31 - 1, description="Existing saved task group id")]) -> dict[str, Any]:
         """Start a saved task group, the app's task-group cleaning mode 7."""
         integer(group_id, 0, 2**31 - 1, "group id")
         return await _invoke(ctx, device, write, "startCleanTaskGroup", {"group_id": group_id})
@@ -624,7 +624,7 @@ def tools(ctx):
         return await _invoke(ctx, device, map_data, map_id)
 
     @ctx.tool(title="Robot schedules")
-    async def vacuum_schedules(device: DeviceRef, start_index: Annotated[int, Field(strict=True, ge=0, description="Device pagination start index")] = 0) -> dict[str, Any]:
+    async def vacuum_schedules(device: DeviceRef, start_index: Annotated[int, Field(strict=True, ge=0, le=2**31 - 1, description="Device pagination start index")] = 0) -> dict[str, Any]:
         """Read up to 32 schedules from one page. week_day stays a raw protocol value."""
         return await _invoke(ctx, device, schedules, start_index)
 
