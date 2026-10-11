@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Create a virtual environment on Python ${{ matrix.python-version }}
+        run: uv venv --python ${{ matrix.python-version }} .venv
+      - name: Install the project
+        run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: Run the tests
+        run: .venv/bin/python -m pytest -q
