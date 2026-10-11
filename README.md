@@ -1,12 +1,21 @@
-# agentic-home
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img alt="tolpo" src="assets/logo-light.svg" width="280">
+  </picture>
+</p>
 
-Local-first control of TP-Link Tapo smart-home devices for AI agents.
+<p align="center"><strong>Local-first control of TP-Link Tapo smart-home devices for AI agents.</strong></p>
 
-[![CI](https://github.com/signerless/agentic-home/actions/workflows/ci.yml/badge.svg)](https://github.com/signerless/agentic-home/actions/workflows/ci.yml)
+<p align="center">
+
+[![CI](https://github.com/signerless/tolpo/actions/workflows/ci.yml/badge.svg)](https://github.com/signerless/tolpo/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
-`agentic-home` turns the Tapo devices on your network into a single interface that an AI agent, or
+</p>
+
+`tolpo` turns the Tapo devices on your network into a single interface that an AI agent, or
 your own code, can read and control. It talks to each device directly over the LAN through the open
 source [python-kasa](https://github.com/python-kasa/python-kasa) library, so no request ever leaves
 your home and no vendor cloud sits in the path. The only credential it needs is the Tapo account the
@@ -42,7 +51,7 @@ It ships two interfaces over the same core:
 ## Installation
 
 ```bash
-git clone https://github.com/signerless/agentic-home && cd agentic-home
+git clone https://github.com/signerless/tolpo && cd tolpo
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -e ".[dev]"
 ```
@@ -57,7 +66,7 @@ export TAPO_EMAIL='you@example.com'
 export TAPO_PASSWORD='your-password'
 ```
 
-Or `~/.config/agentic-home/config.toml` (run `chmod 600` on it, since it holds a password):
+Or `~/.config/tolpo/config.toml` (run `chmod 600` on it, since it holds a password):
 
 ```toml
 [tapo]
@@ -87,7 +96,7 @@ allow_write = []
 Verify your setup with a read-only scan:
 
 ```bash
-.venv/bin/agentic-home scan
+.venv/bin/tolpo scan
 ```
 
 ## Usage with Claude (MCP)
@@ -95,9 +104,9 @@ Verify your setup with a read-only scan:
 Register the server once:
 
 ```bash
-claude mcp add agentic-home \
-  -e AGENTIC_HOME_CREDENTIALS_FILE=$HOME/.tapo_config.json \
-  -- $PWD/.venv/bin/agentic-home mcp
+claude mcp add tolpo \
+  -e TOLPO_CREDENTIALS_FILE=$HOME/.tapo_config.json \
+  -- $PWD/.venv/bin/tolpo mcp
 ```
 
 Use `-e TAPO_EMAIL=... -e TAPO_PASSWORD=...` instead if your credentials live elsewhere. After the
@@ -121,7 +130,7 @@ thousand tokens.
 ## Usage over HTTP
 
 ```bash
-.venv/bin/agentic-home serve        # http://127.0.0.1:8765, interactive docs at /docs
+.venv/bin/tolpo serve        # http://127.0.0.1:8765, interactive docs at /docs
 ```
 
 ```bash
@@ -172,7 +181,7 @@ Homes often have many devices, some battery-powered and slow to answer. Discover
 
 - A UDP broadcast, followed by a direct query to each address in the subnet (`discovery.sweep`),
   because some battery cameras ignore broadcasts yet always answer a direct question.
-- Devices seen before are remembered in `~/.cache/agentic-home/hosts.json` (address, name and model,
+- Devices seen before are remembered in `~/.cache/tolpo/hosts.json` (address, name and model,
   no secrets) and queried directly at startup. A device missing from one scan is never forgotten;
   entries unseen for 30 days are dropped.
 - Devices that do not answer are retried after 5, 15 and 45 seconds, and again on every rescan.
@@ -196,7 +205,7 @@ device, so an agent does not mistake an offline door sensor for a closed door.
 Project layout:
 
 ```
-src/agentic_home/
+src/tolpo/
   registry.py    device discovery, state cache, control operations
   policy.py      what may be read and written (deny-by-default)
   views.py       shared presentation for the HTTP and MCP layers
@@ -206,9 +215,21 @@ src/agentic_home/
   compat.py      small fixes for devices python-kasa cannot reach yet
   cli.py         serve / mcp / scan entry points
 tests/           full suite against simulated devices
+docs/protocols.md  how Tapo devices talk on the local network
+assets/          logo and social preview
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules and [SECURITY.md](SECURITY.md) to report a vulnerability.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, [docs/protocols.md](docs/protocols.md) for the protocol notes and
+[SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## Background
+
+The protocols behind Tapo devices are not documented by the vendor. Part of this project is independent
+analysis of the official Tapo app and of real devices, done so that software can interoperate with hardware
+its owners already have. The result is written down in [docs/protocols.md](docs/protocols.md): which
+transport each model uses, how discovery works, what the newer TPAP protocol looks like, and what we could not
+establish. The notes are in our own words. They contain no vendor code, keys or credentials, and tolpo itself
+only ever signs in with your own Tapo account.
 
 ## Compatibility and status
 

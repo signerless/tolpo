@@ -111,7 +111,7 @@ def build_server(registry: Registry, *, discover: bool = True) -> MCPServer:
         finally:
             await registry.stop()
 
-    server = MCPServer("agentic-home", instructions=INSTRUCTIONS, version=__version__, lifespan=lifespan)
+    server = MCPServer("tolpo", instructions=INSTRUCTIONS, version=__version__, lifespan=lifespan)
 
     async def ready() -> None:
         if not await registry.wait_ready(READY_TIMEOUT):

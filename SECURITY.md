@@ -1,11 +1,11 @@
 # Security policy
 
-`agentic-home` controls physical devices, so security reports are taken seriously.
+`tolpo` controls physical devices, so security reports are taken seriously.
 
 ## Reporting a vulnerability
 
 Please do not open a public issue for a security problem. Use GitHub's private reporting instead: open the
-[Security tab](https://github.com/signerless/agentic-home/security) and choose **Report a vulnerability**.
+[Security tab](https://github.com/signerless/tolpo/security) and choose **Report a vulnerability**.
 Describe what you found, how to reproduce it and the impact you expect. Reports are handled on a best-effort basis.
 
 ## In scope

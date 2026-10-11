@@ -4,8 +4,8 @@ import json
 import kasa
 import pytest
 
-from agentic_home.config import Config
-from agentic_home.registry import Registry
+from tolpo.config import Config
+from tolpo.registry import Registry
 
 from . import fakes
 
@@ -99,7 +99,7 @@ async def test_a_missed_scan_never_makes_the_cache_forget_a_device(tmp_path, mon
         "192.0.2.10": {"seen": seen, "name": "Office 1", "model": "L430C"},
         "192.0.2.77": {"seen": seen, "name": "hallway-cam", "model": "C225"},
     }}))
-    monkeypatch.setattr("agentic_home.registry.CACHE_MAX_AGE", 10 ** 12)
+    monkeypatch.setattr("tolpo.registry.CACHE_MAX_AGE", 10 ** 12)
     patch_kasa(monkeypatch, [])
     reg = Registry(config(tmp_path))
     await reg.discover(quick=True)  # .10 answers, .77 does not
@@ -217,7 +217,7 @@ async def test_devices_that_answer_but_cannot_connect_are_reported(tmp_path, mon
 def test_ecdsa_cameras_patch_is_additive_and_idempotent():
     from kasa.transports.sslaestransport import SslAesTransport
 
-    from agentic_home import compat
+    from tolpo import compat
 
     before = SslAesTransport.CIPHERS.split(":")
     assert compat.allow_ecdsa_cameras() and compat.allow_ecdsa_cameras()

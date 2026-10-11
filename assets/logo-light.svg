@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 108" width="256" height="108" role="img" aria-labelledby="title desc">
+  <title id="title">tolpo</title>
+  <desc id="desc">The word tolpo in monoline letters. The first o is an empty ring and the last o is a solid amber disc, like a light that has been switched on.</desc>
+  <g fill="none" stroke="#1B1F24" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 12)">
+    <path d="M16 4V46A14 14 0 0 0 30 60"/>
+    <path d="M4 22H30"/>
+    <circle cx="69" cy="40" r="20"/>
+    <path d="M111 0V60"/>
+    <path d="M138 20V84"/>
+    <circle cx="158" cy="40" r="20"/>
+    <circle cx="216" cy="40" r="23.5" fill="#F59E0B" stroke="none"/>
+  </g>
+</svg>

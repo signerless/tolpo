@@ -1,9 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from agentic_home.api import create_app
-from agentic_home.config import Config
-from agentic_home.registry import Registry
+from tolpo.api import create_app
+from tolpo.config import Config
+from tolpo.registry import Registry
 
 from . import fakes
 

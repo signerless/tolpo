@@ -28,14 +28,14 @@ body:
       options:
         - MCP server
         - HTTP API
-        - agentic-home scan
+        - tolpo scan
     validations:
       required: true
   - type: input
     id: versions
     attributes:
       label: Versions
-      description: Output of `.venv/bin/python --version` and `uv pip list | grep -i -E "kasa|agentic"`.
+      description: Output of `.venv/bin/python --version` and `uv pip list | grep -i -E "kasa|tolpo"`.
     validations:
       required: true
   - type: textarea

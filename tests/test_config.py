@@ -2,17 +2,17 @@ import json
 
 import pytest
 
-from agentic_home.cli import NO_CREDENTIALS, check
-from agentic_home.config import Config, is_loopback, load_config
-from agentic_home.registry import jsonable
+from tolpo.cli import NO_CREDENTIALS, check
+from tolpo.config import Config, is_loopback, load_config
+from tolpo.registry import jsonable
 import datetime
 import enum
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in ("TAPO_EMAIL", "TAPO_PASSWORD", "AGENTIC_HOME_TOKEN", "AGENTIC_HOME_HOST", "AGENTIC_HOME_PORT",
-                 "AGENTIC_HOME_CONFIG", "AGENTIC_HOME_CREDENTIALS_FILE"):
+    for name in ("TAPO_EMAIL", "TAPO_PASSWORD", "TOLPO_TOKEN", "TOLPO_HOST", "TOLPO_PORT",
+                 "TOLPO_CONFIG", "TOLPO_CREDENTIALS_FILE"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -30,7 +30,7 @@ def test_toml_then_env_override(tmp_path, monkeypatch):
     cfg = load_config(str(path))
     assert (cfg.email, cfg.port, cfg.subnets, cfg.allow_write) == ("a@x.com", 9000, ("10.0.0.0/24",), frozenset({"pan_left"}))
     monkeypatch.setenv("TAPO_EMAIL", "b@x.com")
-    monkeypatch.setenv("AGENTIC_HOME_PORT", "9100")
+    monkeypatch.setenv("TOLPO_PORT", "9100")
     cfg = load_config(str(path))
     assert (cfg.email, cfg.password, cfg.port) == ("b@x.com", "p", 9100)
 
@@ -39,7 +39,7 @@ def test_credentials_file_is_read_in_place(tmp_path, monkeypatch):
     creds = tmp_path / "creds.json"
     creds.write_text(json.dumps({"email": "c@x.com", "password": "secret", "devices": {}}))
     creds.chmod(0o600)
-    monkeypatch.setenv("AGENTIC_HOME_CREDENTIALS_FILE", str(creds))
+    monkeypatch.setenv("TOLPO_CREDENTIALS_FILE", str(creds))
     cfg = load_config(str(tmp_path / "missing.toml"))
     assert (cfg.email, cfg.password) == ("c@x.com", "secret")
 

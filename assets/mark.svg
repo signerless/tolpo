@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title desc">
+  <title id="title">tolpo mark</title>
+  <desc id="desc">An empty ring next to a solid amber disc on a graphite square: off, then on.</desc>
+  <rect width="128" height="128" rx="28" fill="#14171A"/>
+  <circle cx="40" cy="64" r="17" fill="none" stroke="#F4F4F5" stroke-width="7"/>
+  <circle cx="88" cy="64" r="20.5" fill="#FBBF24"/>
+</svg>

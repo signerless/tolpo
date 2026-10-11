@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Run `.venv/bin/agentic-home scan` first. A device that answers discovery but cannot connect is listed
+        Run `.venv/bin/tolpo scan` first. A device that answers discovery but cannot connect is listed
         there with a reason. Remove credentials, MAC addresses and IP addresses before pasting.
   - type: input
     id: model
@@ -17,7 +17,7 @@ body:
   - type: textarea
     id: scan
     attributes:
-      label: Output of `agentic-home scan`
+      label: Output of `tolpo scan`
       render: text
     validations:
       required: true

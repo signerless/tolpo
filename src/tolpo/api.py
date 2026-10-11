@@ -65,7 +65,7 @@ def create_app(
         yield
         await reg.stop()
 
-    app = FastAPI(title="agentic-home", version=__version__, description=DESCRIPTION, lifespan=lifespan)
+    app = FastAPI(title="tolpo", version=__version__, description=DESCRIPTION, lifespan=lifespan)
 
     if not cfg.token:
         # Without a token the only protection is the loopback bind, so also refuse requests

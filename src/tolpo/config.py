@@ -13,7 +13,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = "~/.config/agentic-home/config.toml"
+DEFAULT_CONFIG_PATH = "~/.config/tolpo/config.toml"
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class Config:
     discovery_interval: int = 600
     sweep: bool = True
     cache_ttl: float = 10.0
-    cache_file: str = "~/.cache/agentic-home/hosts.json"
+    cache_file: str = "~/.cache/tolpo/hosts.json"
     allow_write: frozenset[str] = frozenset()
 
 
@@ -41,10 +41,10 @@ def _warn_if_shared(path: Path) -> None:
 def load_config(path: str | None = None) -> Config:
     """Read the config file, then let environment variables override it.
 
-    Environment: TAPO_EMAIL, TAPO_PASSWORD, AGENTIC_HOME_TOKEN, AGENTIC_HOME_HOST,
-    AGENTIC_HOME_PORT, AGENTIC_HOME_CONFIG, AGENTIC_HOME_CREDENTIALS_FILE.
+    Environment: TAPO_EMAIL, TAPO_PASSWORD, TOLPO_TOKEN, TOLPO_HOST,
+    TOLPO_PORT, TOLPO_CONFIG, TOLPO_CREDENTIALS_FILE.
     """
-    cfg_path = Path(path or os.environ.get("AGENTIC_HOME_CONFIG") or DEFAULT_CONFIG_PATH).expanduser()
+    cfg_path = Path(path or os.environ.get("TOLPO_CONFIG") or DEFAULT_CONFIG_PATH).expanduser()
     raw: dict = {}
     if cfg_path.is_file():
         raw = tomllib.loads(cfg_path.read_text())
@@ -56,7 +56,7 @@ def load_config(path: str | None = None) -> Config:
         _warn_if_shared(cfg_path)
 
     # A JSON file {"email": ..., "password": ...} is read in place instead of copying the secret.
-    cred_file = os.environ.get("AGENTIC_HOME_CREDENTIALS_FILE") or tapo.get("credentials_file")
+    cred_file = os.environ.get("TOLPO_CREDENTIALS_FILE") or tapo.get("credentials_file")
     if cred_file and not (email and password):
         cf = Path(cred_file).expanduser()
         data = json.loads(cf.read_text())
@@ -66,15 +66,15 @@ def load_config(path: str | None = None) -> Config:
     return Config(
         email=os.environ.get("TAPO_EMAIL", email),
         password=os.environ.get("TAPO_PASSWORD", password),
-        token=os.environ.get("AGENTIC_HOME_TOKEN", token),
-        host=os.environ.get("AGENTIC_HOME_HOST", server.get("host", "127.0.0.1")),
-        port=int(os.environ.get("AGENTIC_HOME_PORT", server.get("port", 8765))),
+        token=os.environ.get("TOLPO_TOKEN", token),
+        host=os.environ.get("TOLPO_HOST", server.get("host", "127.0.0.1")),
+        port=int(os.environ.get("TOLPO_PORT", server.get("port", 8765))),
         subnets=tuple(discovery.get("subnets", ())),
         hosts=tuple(discovery.get("hosts", ())),
         discovery_interval=int(discovery.get("interval_seconds", 600)),
         sweep=bool(discovery.get("sweep", True)),
         cache_ttl=float(server.get("cache_ttl_seconds", 10.0)),
-        cache_file=discovery.get("cache_file", "~/.cache/agentic-home/hosts.json"),
+        cache_file=discovery.get("cache_file", "~/.cache/tolpo/hosts.json"),
         allow_write=frozenset(policy.get("allow_write", ())),
     )
 

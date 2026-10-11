@@ -13,7 +13,7 @@ from .registry import Registry
 
 NO_CREDENTIALS = (
     "No Tapo account configured. Set TAPO_EMAIL and TAPO_PASSWORD, or put them in\n"
-    "~/.config/agentic-home/config.toml under [tapo] (see README), then chmod 600 that file."
+    "~/.config/tolpo/config.toml under [tapo] (see README), then chmod 600 that file."
 )
 
 
@@ -24,7 +24,7 @@ def check(cfg: Config) -> str | None:
     if not is_loopback(cfg.host) and not cfg.token:
         return (
             f"Refusing to listen on {cfg.host} without a token: anyone on the network could control the house.\n"
-            "Set AGENTIC_HOME_TOKEN (or [server] token in the config), or bind to 127.0.0.1."
+            "Set TOLPO_TOKEN (or [server] token in the config), or bind to 127.0.0.1."
         )
     return None
 
@@ -44,7 +44,7 @@ async def _scan(cfg: Config) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="agentic-home", description=__doc__)
+    parser = argparse.ArgumentParser(prog="tolpo", description=__doc__)
     parser.add_argument("--config", help="path to config.toml")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="run the HTTP API")

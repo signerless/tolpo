@@ -5,7 +5,7 @@ Thanks for helping. This project controls physical devices, so every change is r
 ## Setup
 
 ```bash
-git clone https://github.com/signerless/agentic-home && cd agentic-home
+git clone https://github.com/signerless/tolpo && cd tolpo
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m pytest

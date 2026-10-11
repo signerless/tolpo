@@ -5,9 +5,9 @@ import pytest
 from kasa import Feature
 from mcp import Client
 
-from agentic_home.config import Config
-from agentic_home.mcp_server import build_server
-from agentic_home.registry import Registry
+from tolpo.config import Config
+from tolpo.mcp_server import build_server
+from tolpo.registry import Registry
 
 from . import fakes
 
@@ -194,7 +194,7 @@ async def test_tools_wait_for_the_first_discovery():
 
 
 async def test_known_devices_do_not_wait_for_the_slow_hub(monkeypatch):
-    monkeypatch.setattr("agentic_home.mcp_server.READY_TIMEOUT", 0.2)
+    monkeypatch.setattr("tolpo.mcp_server.READY_TIMEOUT", 0.2)
     reg = Registry(Config(email="a", password="b", cache_ttl=0.0, cache_file=""))
     never = asyncio.Event()
 

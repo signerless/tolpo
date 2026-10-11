@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <rect width="1280" height="640" fill="#14171A"/>
+  <g transform="translate(300 118) scale(2.6)">
+    <g fill="none" stroke="#F4F4F5" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 12)">
+      <path d="M16 4V46A14 14 0 0 0 30 60"/><path d="M4 22H30"/>
+      <circle cx="69" cy="40" r="20"/><path d="M111 0V60"/><path d="M138 20V84"/><circle cx="158" cy="40" r="20"/>
+      <circle cx="216" cy="40" r="23.5" fill="#FBBF24" stroke="none"/>
+    </g>
+  </g>
+  <text x="640" y="494" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#D4D4D8">Local-first control of smart-home devices for AI agents</text>
+  <text x="640" y="548" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="26" fill="#71717A" letter-spacing="1">MCP server  |  HTTP API  |  MIT</text>
+</svg>
