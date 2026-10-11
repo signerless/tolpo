@@ -271,6 +271,12 @@ When something cannot be reached, the answers say so. `home_overview` and `list_
 `complete: false` and a `not_connected` list with the name, model and reason for each unreachable
 device, so an agent does not mistake an offline door sensor for a closed door.
 
+## For AI agents
+
+If you are an AI agent asked to set tolpo up or to use it, start with
+[llms.txt](https://raw.githubusercontent.com/signerless/tolpo/main/llms.txt). If you are asked to change the code,
+read [AGENTS.md](https://github.com/signerless/tolpo/blob/main/AGENTS.md) first.
+
 ## Development
 
 ```bash
