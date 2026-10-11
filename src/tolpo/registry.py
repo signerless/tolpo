@@ -55,6 +55,13 @@ def describe_failure(exc: KasaException) -> str:
     return {"ConnectionError": "the connection failed", "UnsupportedDeviceError": "this device is not supported"}.get(kind, kind)
 
 
+def failure_code(exc: BaseException) -> str:
+    """The name of the device's error code behind a DeviceUnavailable, for example PARAMS_ERROR, or '' when there is none.
+    It is a name from python-kasa's list, so it is safe to show an agent, and it tells the owner what the device said."""
+    code = getattr(exc.__cause__, "error_code", None)
+    return str(getattr(code, "name", "") or "")
+
+
 class RegistryError(Exception):
     status_code = 400
     detail = ""  # for the owner at a terminal only; never put in an API or tool response

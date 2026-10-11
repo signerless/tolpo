@@ -188,8 +188,19 @@ async def test_led_validation(house, rule, start, end):
     assert caller.sent == []
 
 
+async def test_asking_the_vendor_cloud_for_firmware_is_level_1_and_not_a_read(house):
+    """The device makes the request to the vendor cloud, so it is not a read-only action."""
+    reg, caller, _ = house(0)
+    with pytest.raises(Forbidden, match="level 1"):
+        await admin.firmware_info(reg, caller, "desk-lamp", check=True)
+    assert "get_latest_fw" not in caller.methods_sent()
+    reg, caller, _ = house(1)
+    await admin.firmware_info(reg, caller, "desk-lamp", check=True)
+    assert "get_latest_fw" in caller.methods_sent()
+
+
 async def test_firmware_read_cached_notes_check_and_progress(house):
-    reg, caller, devices = house(0)
+    reg, caller, devices = house(1)
     devices["lamp"].modules[Module.Firmware].firmware_update_info = SimpleNamespace(status=1, needs_upgrade=True, version="2.0", release_notes="fix\nnow", release_date=None)
     result = await admin.firmware_info(reg, caller, "desk-lamp")
     assert result["auto_update"] == AUTO and result["fw_ver"] == "1.0" and result["latest_cached"]["release_note"] == "fix now"
@@ -301,7 +312,7 @@ async def test_device_failures_identify_device_and_action_without_raw_values(hou
 
 
 async def test_diagnostics_allowlist_flattens_text_and_keeps_false_and_zero(house):
-    reg, caller, _ = house(0)
+    reg, caller, _ = house(1)
     secrets = {"ssid": "SECRET_WIFI", "mac": "SECRET_MAC", "token": "SECRET_TOKEN", "homekit_setup_code": "SECRET_CODE", "latitude": 123, "nickname": "BAD NAME"}
     caller.respond("get_device_info", {**secrets, "fw_ver": "1.0\n test", "rssi": -50, "signal_level": 0, "uptime": 120, "on_time": 30})
     caller.respond("component_nego", {**secrets, "component_list": [{"id": "firmware\n test", "ver_code": 2, **secrets}]})
@@ -890,7 +901,7 @@ async def test_room_power_refuses_camera_even_when_camera_state_is_explicitly_wr
 
 
 async def test_explicit_method_permission_keeps_firmware_confirmation(house):
-    reg, caller, _ = house(0, allow_methods=frozenset({"fw_download", "set_device_info"}))
+    reg, caller, _ = house(1, allow_methods=frozenset({"fw_download", "set_device_info"}))
     await admin.rename_device(reg, caller, "desk-lamp", "New")
     assert caller.sent[-1][1] == "set_device_info"
     caller.sent.clear()

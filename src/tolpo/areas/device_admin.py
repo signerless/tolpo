@@ -20,7 +20,7 @@ from pydantic import Field
 from .. import policy
 from ..calls import NeedsConfirmation
 from ..policy import Tier
-from ..registry import DeviceUnavailable, Forbidden, NotFound, RegistryError, Unsupported
+from ..registry import DeviceUnavailable, Forbidden, NotFound, RegistryError, Unsupported, failure_code
 from ..views import clean
 from .common import CAMERA_KINDS, SMART_KINDS
 
@@ -37,7 +37,7 @@ METHODS = [
     policy.method("set_led_info", Tier.SETTING, SMART_KINDS, "Change the indicator LED rule or schedule."),
     policy.method("getLedStatus", Tier.READ, CAM_DIALECT_KINDS, "Read the camera indicator LED state."),
     policy.method("setLedStatus", Tier.SECURITY, CAM_DIALECT_KINDS, "Change the camera indicator light. Off hides that the camera is recording."),
-    policy.method("get_latest_fw", Tier.READ, SMART_KINDS, "Ask the device to check for firmware updates."),
+    policy.method("get_latest_fw", Tier.CONTROL, SMART_KINDS, "Ask the device to check the vendor cloud for a firmware update."),
     policy.method("get_auto_update_info", Tier.READ, SMART_KINDS, "Read automatic firmware update settings."),
     # Turning automatic updates on lets the device install firmware and reboot unattended, and turning them off stops
     # security fixes. The audit groups both with firmware installation, and the camera firmware switch is level 4 too.
@@ -103,7 +103,8 @@ async def _call(caller, entry, method, params=None, *, confirm=None):
     except DeviceUnavailable as exc:
         # The shared caller may include raw library text. Keep device values out of errors too.
         text = str(exc)
-        reason = "device reported an error"
+        code = failure_code(exc)
+        reason = f"device reported an error ({code})" if code else "device reported an error"
         if "rejected the account" in text:
             reason = "account credentials were rejected"
         elif "did not answer" in text:
@@ -547,9 +548,10 @@ def tools(ctx):
         """Read SMART versions, automatic update settings and locally cached release notes."""
         return await run(firmware_info, device)
 
-    @ctx.tool(title="Check firmware")
+    @ctx.tool(title="Check firmware", tier=Tier.CONTROL)
     async def firmware_check(device: DeviceRef) -> dict[str, Any]:
-        """Ask a SMART device to check its cloud for an update and return local release notes."""
+        """Ask a SMART device to check the vendor cloud for an update and return local release notes. The device makes
+        the request, not tolpo, and it can take longer than a local read."""
         return await run(firmware_info, device, check=True)
 
     @ctx.tool(title="Firmware progress")

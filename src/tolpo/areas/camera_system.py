@@ -12,7 +12,7 @@ from pydantic import Field
 
 from .. import policy
 from ..policy import Tier
-from ..registry import BadRequest, DeviceUnavailable
+from ..registry import BadRequest, DeviceUnavailable, failure_code
 from ..views import clean
 
 KINDS = ["camera", "doorbell"]
@@ -97,7 +97,9 @@ async def _call(caller, entry, method, params, confirm=None):
         result = await caller.call(entry, method, params, confirm=confirm)
     except DeviceUnavailable as exc:
         cause = exc.__cause__
-        reason = "did not answer in time" if isinstance(cause, TimeoutError) else "rejected the account credentials" if isinstance(cause, AuthenticationError) else "reported a device error"
+        code = failure_code(exc)
+        reason = "did not answer in time" if isinstance(cause, TimeoutError) else "rejected the account credentials" if isinstance(cause, AuthenticationError) else (
+            f"reported a device error ({code})" if code else "reported a device error")
         raise DeviceUnavailable(f"{entry.slug}: {method}: camera {reason}") from exc
     if _rejected(result):
         raise DeviceUnavailable(f"{entry.slug}: {method} was rejected by the camera")

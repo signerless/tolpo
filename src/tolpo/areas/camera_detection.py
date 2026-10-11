@@ -10,7 +10,7 @@ from pydantic import Field, StrictInt, StrictStr
 
 from .. import policy
 from ..policy import Tier
-from ..registry import BadRequest, DeviceUnavailable
+from ..registry import BadRequest, DeviceUnavailable, failure_code
 from ..views import clean
 
 KINDS = ["camera", "doorbell"]
@@ -86,8 +86,9 @@ async def _call(caller, entry, method, params, *, confirm=None):
     try:
         result = await caller.call(entry, method, params, confirm=confirm)
     except DeviceUnavailable as exc:
+        code = failure_code(exc)
         reason = "rejected the account credentials" if isinstance(exc.__cause__, AuthenticationError) else (
-            "did not answer in time" if isinstance(exc.__cause__, TimeoutError) else "reported an error")
+            "did not answer in time" if isinstance(exc.__cause__, TimeoutError) else (f"reported an error ({code})" if code else "reported an error"))
         raise DeviceUnavailable(f"{clean(entry.slug)} {reason} for {method}") from None
     # Some canned or older protocol responses retain the envelope. Do not return raw errors.
     if isinstance(result, dict) and result.get("error_code", 0) != 0:

@@ -8,7 +8,7 @@ from kasa.protocols.smartcamprotocol import SmartCamProtocol
 
 from .. import policy
 from ..policy import Tier
-from ..registry import BadRequest, DeviceUnavailable, Forbidden, RegistryError
+from ..registry import BadRequest, DeviceUnavailable, Forbidden, RegistryError, failure_code
 from ..views import clean
 
 METHODS = [
@@ -407,7 +407,8 @@ async def _call(caller, entry, method, params=None, confirm=None):
         return await caller.call(entry, method, params, confirm=confirm)
     except DeviceUnavailable as exc:
         # Device error text can echo pairing keys or credentials. Never forward it.
-        reason = "device rejected or could not complete the request"
+        code = failure_code(exc)
+        reason = f"device rejected or could not complete the request ({code})" if code else "device rejected or could not complete the request"
         if "UNSUPPORTED_METHOD" in str(exc) or "-40106" in str(exc):
             reason = "device does not support this method"
         elif "did not answer in time" in str(exc):
