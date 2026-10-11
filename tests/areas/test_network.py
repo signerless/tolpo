@@ -917,3 +917,45 @@ async def test_mcp_registration_policy_hints_and_safe_errors(make_house, mcp):
         blocked = await client.call_tool("network_block_internet", {"device": "desk-lamp", "reason": "test"})
         assert blocked.is_error and "level 4" in blocked.content[0].text
         assert "allow_write" not in blocked.content[0].text
+
+
+@pytest.mark.anyio
+async def test_every_firewall_write_refuses_below_level4_before_commands(make_house, tmp_path):
+    service, kernel, _, _ = writable(make_house, tmp_path)
+    plan = await service.plan("block_internet", "desk-lamp", [], "test")
+    await apply_plan(service, plan)
+    service.registry.cfg = replace(service.registry.cfg, tier=3)
+    kernel.calls.clear()
+    with pytest.raises(Forbidden, match="level 4"):
+        await service.rollback(plan["plan_id"], "network_rollback " + plan["plan_id"])
+    with pytest.raises(Forbidden, match="level 4"):
+        await service.rollback_all("network_rollback_all")
+    assert kernel.calls == [] and plan["plan_id"] in service.active
+    service.registry.cfg = replace(service.registry.cfg, tier=4)
+    await service.rollback(plan["plan_id"], "network_rollback " + plan["plan_id"])
+    service.cooldown_until = 0
+    plan = await service.plan("block_internet", "desk-lamp", [], "test")
+    service.registry.cfg = replace(service.registry.cfg, tier=3)
+    kernel.calls.clear()
+    with pytest.raises(Forbidden, match="level 4"):
+        await apply_plan(service, plan)
+    assert kernel.calls == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("ref", ["192.0.2.50", "192.0.2.0/24", "*", "0.0.0.0", "router.example.test"])
+async def test_firewall_target_is_only_one_managed_device(make_house, tmp_path, ref):
+    service, kernel, _, _ = writable(make_house, tmp_path)
+    with pytest.raises(Exception) as error:
+        await service.plan("block_internet", ref, [], "test")
+    assert not isinstance(error.value, AssertionError)
+    assert not any(argv[0] == "nft" for argv, _ in kernel.calls)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("hosts", [["0.0.0.0/0"], ["::/0"], ["*"], ["203.0.113.0/24"], ["dns.google"], ["203.0.113.1-203.0.113.9"]])
+async def test_allow_list_refuses_ranges_wildcards_and_names(make_house, tmp_path, hosts):
+    service, kernel, _, _ = writable(make_house, tmp_path)
+    with pytest.raises(NetworkError):
+        await service.plan("allow_only", "desk-lamp", hosts, "test")
+    assert kernel.calls == []
