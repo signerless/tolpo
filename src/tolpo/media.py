@@ -115,8 +115,11 @@ def _parse_head(head: bytes) -> tuple[int, dict[str, str]]:
 # `type` (request, response, notification, error), a `seq` and `params`. Notes on the fields are in docs/protocols.md and
 # docs/areas/camera_media.md, written from the audit in our own words.
 
+# UNVERIFIED: from the app's code only; none of the owner's cameras uses TLS-PSK.
 PSK_PORT = 28800  # cameras that protect their media with TLS and a pre-shared key serve it here instead of on 8800
 CLIENT_UUID = str(uuid.uuid4())  # the app sends one per install; tolpo sends one per process, never anything about the host
+# UNVERIFIED: the window and the acknowledgement come from the app's code; whether a camera really waits for them is
+# not tested on a real one.
 WINDOW_SIZE = 50  # parts the camera may send before it waits for an acknowledgement (download and picture sessions)
 ACK_EVERY = 25  # the app acknowledges every 25th part number
 MAX_IMAGE = 2 * 1024 * 1024  # a thumbnail or event picture; the app's own buffer for one is 500 KB
@@ -208,6 +211,8 @@ def _code(value: Any) -> int | None:
 
 def notice_failure(event: str, params: dict[str, Any]) -> GrabError | None:
     """A notification that means the session cannot go on, as an error an agent may read. None for the others."""
+    # UNVERIFIED: event names and field names (`reason`, `close_reason`, `status`) are from the app's classes; no real
+    # camera has been seen sending them to tolpo yet.
     if event == "device_locked":
         return GrabError("locked", "the camera locked its video login after failed attempts; wait several minutes before trying again")
     if event == "stream_finish":
@@ -470,6 +475,7 @@ async def fetch_image(
 ) -> tuple[str, bytes]:
     """One picture from a picture session: `request` is {"image": {...}} (a recording's cover picture) or
     {"download": {...}} (an event picture). Returns the format ("jpeg", "h264" or "hevc") and the bytes."""
+    # UNVERIFIED: the end of a picture is a `stream_status` notice with status finished or image_ended, as in the app.
     acks = "download" in request  # the app acknowledges parts on download sessions; it was not seen doing so for covers
     session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout, what="the picture")
     await session.open()
@@ -525,6 +531,7 @@ async def download(
     """Copy a recording from the camera's memory card: `request` is {"download": {...}}. Every video part goes to
     `write` as decrypted MPEG-TS. Parts are acknowledged every 25th sequence number with a window of 50, as the app
     does. Stops politely at `max_bytes` or after `max_seconds`, whichever comes first."""
+    # UNVERIFIED: how a real camera ends a download (a `stream_status` finished notice, `stream_finish`, or hanging up).
     session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout, what="the recording")
     await session.open()
     result = Download()

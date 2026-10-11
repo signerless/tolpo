@@ -666,3 +666,31 @@ async def test_a_time_without_video_leaves_no_empty_file(make_house, monkeypatch
         with pytest.raises(DeviceUnavailable, match="no video"):
             await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool, method, args", [
+    ("camera_recordings_plan", "getRecordPlan", {}),
+    ("camera_recordings_days", "searchDateWithVideo", {}),
+    ("camera_recordings_day", "searchVideoWithUTC", {"day": "2026-10-01"}),
+    ("camera_recordings_events", "searchDetectionList", {}),
+    ("camera_storage_set_loop", "setCircularRecordingConfig", {"on": True}),
+    ("camera_recordings_set_plan", "getRecordPlan", {"enabled": True}),
+])
+async def test_every_tool_names_the_camera_when_it_fails(make_house, mcp, tool, method, args):
+    reg, caller, _ = make_house(tier=2, responses={method: DeviceUnavailable("hallway-cam did not answer in time")})
+    async with mcp(reg, caller) as client:
+        result = await client.call_tool(tool, {"camera": "hallway-cam", **args})
+    assert result.is_error and "hallway-cam did not answer" in text(result)
+    assert caller.methods_sent() == [method]  # nothing more was tried after the failure
+
+
+@pytest.mark.anyio
+async def test_a_level_0_owner_can_still_read_but_not_write(make_house, mcp):
+    reg, caller, _ = make_house(tier=0, responses={"getRecordPlan": plan(), "getSdCardStatus": sd(CARD)})
+    async with mcp(reg, caller) as client:
+        read = await client.call_tool("camera_recordings_plan", {"camera": "hallway-cam"})
+        status = await client.call_tool("camera_storage_status", {"camera": "hallway-cam"})
+        write = await client.call_tool("camera_storage_set_loop", {"camera": "hallway-cam", "on": True})
+    assert not read.is_error and not status.is_error and write.is_error
+    assert "setCircularRecordingConfig" not in caller.methods_sent()
