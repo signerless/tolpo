@@ -274,9 +274,12 @@ WRITES.update({m: (Tier.SETTING, s) for m, s in {
     "setHDR": "Change camera HDR processing.",
     "setImageStyleConfig": "Change camera image style.",
     "setOsd": "Change camera video overlays.",
-    "setCoverConfig": "Enable or disable existing camera privacy zones.",
-    "setLedStatus": "Change the camera indicator light.",
 }.items()})
+# Turning the indicator light off hides that the camera records, and turning privacy zones off shows areas the
+# owner blacked out. One method carries both directions, so both are level 3. setLedStatus must be level 3 in
+# every area that declares it (camera_system, hub, device_admin), or the loader fails on merge.
+WRITES["setLedStatus"] = (Tier.SECURITY, "Change the camera indicator light. Off hides that the camera is recording.")
+WRITES["setCoverConfig"] = (Tier.SECURITY, "Enable or disable camera privacy zones. Off shows the blacked-out areas.")
 # The shared method catalog has no parameter-dependent tiers. Keep the whole
 # lens-mask method at SECURITY until the shared caller can distinguish ON (1).
 WRITES["setLensMaskConfig"] = (Tier.SECURITY, "Change camera privacy mode.")
@@ -683,15 +686,17 @@ def tools(ctx):
         """Show or hide an overlay while preserving its current position and time format."""
         return await run(osd_change, device, element, enabled, text)
 
-    @ctx.tool(title="Camera privacy zones", tier=Tier.SETTING)
-    async def camera_image_privacy_zones(device: Device, enabled: Annotated[bool, Field(description="Apply the existing blacked-out regions")]) -> dict[str, Any]:
-        """Enable or disable existing privacy zones. Read their geometry with camera_image_read."""
-        return await run(image_change, device, "privacy_zones", enabled)
+    @ctx.tool(title="Camera privacy zones", tier=Tier.SECURITY)
+    async def camera_image_privacy_zones(device: Device, enabled: Annotated[bool, Field(description="Apply the existing blacked-out regions. False shows those areas in the video")], confirm: Confirm = None) -> dict[str, Any]:
+        """Enable or disable existing privacy zones. Level 3 with confirmation in both directions, because off shows
+        areas the owner blacked out. Read their geometry with camera_image_read."""
+        return await run(image_change, device, "privacy_zones", enabled, confirm)
 
-    @ctx.tool(title="Camera indicator light", tier=Tier.SETTING)
-    async def camera_image_led(device: Device, enabled: Annotated[bool, Field(description="Turn the status LED on or off")]) -> dict[str, Any]:
-        """Change the status indicator on cameras with the supported LED dialect."""
-        return await run(image_change, device, "led", enabled)
+    @ctx.tool(title="Camera indicator light", tier=Tier.SECURITY)
+    async def camera_image_led(device: Device, enabled: Annotated[bool, Field(description="Turn the status LED on or off. Off hides that the camera is recording")], confirm: Confirm = None) -> dict[str, Any]:
+        """Change the status indicator on cameras with the supported LED dialect. Level 3 with confirmation in both
+        directions, because a dark LED hides that the camera records."""
+        return await run(image_change, device, "led", enabled, confirm)
 
     @ctx.tool(title="Camera privacy status")
     async def camera_system_privacy_status(device: Device) -> dict[str, Any]:

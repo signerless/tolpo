@@ -105,8 +105,6 @@ IMAGE = [
     ("flip", "center", "setRotationStatus", {"image": {"switch": {"flip_type": "center"}}}),
     ("style", "bright", "setImageStyleConfig", {"image": {"common": {"style": "bright"}}}),
     ("hdr", True, "setHDR", {"video": {"set_hdr": {"secname": "main", "hdr": 1}}}),
-    ("led", False, "setLedStatus", {"led": {"config": {"enabled": "off"}}}),
-    ("privacy_zones", True, "setCoverConfig", {"cover": {"cover": {"enabled": "on"}}}),
 ]
 
 
@@ -159,6 +157,29 @@ async def test_osd_errors_policy_and_validation(make_house):
         with pytest.raises(BadRequest):
             await area.osd_change(reg, caller, "hallway-cam", element, True, text)
     assert "setOsd" not in caller.methods_sent()
+
+
+@pytest.mark.parametrize("setting,method,module,section", [("led", "setLedStatus", "led", "config"), ("privacy_zones", "setCoverConfig", "cover", "cover")])
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_led_and_privacy_zones_are_level_3_with_confirmation(make_house, setting, method, module, section, enabled):
+    """A dark LED hides recording and disabled zones show blacked-out areas, so both directions are level 3."""
+    from tolpo.calls import NeedsConfirmation
+    phrase = f"{method} hallway-cam"
+    reg, caller = image_house(make_house, 2)
+    with pytest.raises(Forbidden, match="level 3"):
+        await area.image_change(reg, caller, "hallway-cam", setting, enabled, phrase)
+    assert method not in caller.methods_sent()
+    reg, caller = image_house(make_house, 3)
+    for invalid in [None, f"{method} other"]:
+        with pytest.raises(NeedsConfirmation, match=phrase):
+            await area.image_change(reg, caller, "hallway-cam", setting, enabled, invalid)
+    assert method not in caller.methods_sent()
+    assert (await area.image_change(reg, caller, "hallway-cam", setting, enabled, phrase))["changed"] == {setting: enabled}
+    assert caller.sent[-1] == ("hallway-cam", method, {module: {section: {"enabled": "on" if enabled else "off"}}})
+    reg.refresh.assert_awaited_once()
+    caller.respond(method, {"error_code": -1})
+    with pytest.raises(DeviceUnavailable, match=method):
+        await area.image_change(reg, caller, "hallway-cam", setting, enabled, phrase)
 
 
 async def test_privacy_both_directions_require_security_confirmation(make_house):
@@ -503,8 +524,8 @@ TOOLS = [
     ("camera_image_mode", {"setting": "style", "value": "bright"}, "setImageStyleConfig"),
     ("camera_image_hdr", {"enabled": True}, "setHDR"),
     ("camera_image_osd", {"element": "time", "enabled": True}, "setOsd"),
-    ("camera_image_privacy_zones", {"enabled": True}, "setCoverConfig"),
-    ("camera_image_led", {"enabled": True}, "setLedStatus"),
+    ("camera_image_privacy_zones", {"enabled": False, "confirm": "setCoverConfig hallway-cam"}, "setCoverConfig"),
+    ("camera_image_led", {"enabled": False, "confirm": "setLedStatus hallway-cam"}, "setLedStatus"),
     ("camera_system_privacy_status", {}, "getLensMaskConfig"),
     ("camera_system_privacy", {"enabled": False, "confirm": "setLensMaskConfig hallway-cam"}, "setLensMaskConfig"),
     ("camera_battery_read", {"setting": "battery_capability"}, "getBatteryCapability"),
