@@ -1,0 +1,89 @@
+name: Container
+
+# Every change to the image is built and smoke tested for amd64 and arm64. Pushing a version tag, or running this
+# workflow by hand from main, then publishes the image to ghcr.io/signerless/tolpo.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/container.yml
+      - scripts/smoke_mcp.py
+      - src/**
+      - pyproject.toml
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test the image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build for amd64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: tolpo:amd64
+      - name: Smoke test on amd64
+        run: docker run --rm -i --entrypoint python tolpo:amd64 - < scripts/smoke_mcp.py
+      - name: The command line works
+        run: docker run --rm tolpo:amd64 --help
+      - name: Build for arm64, the Raspberry Pi
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: linux/arm64
+          tags: tolpo:arm64
+      - name: Smoke test on arm64, under emulation
+        run: docker run --rm -i --platform linux/arm64 --entrypoint python tolpo:arm64 - < scripts/smoke_mcp.py
+
+  publish:
+    name: Publish to ghcr.io
+    needs: test
+    if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the version, and check it against the tag
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then TAG="$GITHUB_REF_NAME"; else TAG=""; fi
+          VERSION=$(python3 scripts/check_release.py ${TAG:+"$TAG"} | sed 's/.*: //')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest
+      - name: Build and push for amd64 and arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

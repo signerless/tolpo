@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.pytest_cache
+node_modules
+dist
+tests
+test
+docs
+assets
+bin
+scripts
+*.tgz
+**/__pycache__
