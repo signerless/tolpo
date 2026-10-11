@@ -96,8 +96,27 @@ cross-checked the public descriptions. The second track, and padding packets at 
 ffmpeg's guessing stall on a live pipe. So tolpo reads the program tables itself and gives ffmpeg only the raw video.
 
 tolpo signs in once per attempt, never retries a rejected login, and refuses a session without encryption. It uses
-only the owner's own account. Playback of SD card recordings, clip downloads and two-way audio use related
-requests on the same port. They are not implemented.
+only the owner's own account.
+
+The same session carries more than live view. As the app's streaming code and the public descriptions show, a
+client can also:
+
+- Send a client id header, one random value per install, as the app does.
+- Read notices from the camera between the media parts. They say why a session ended: the stream finished, another
+  client took the camera, the card went offline, or there was not enough bandwidth. tolpo turns the ones it knows
+  into plain messages and never passes the camera's own text on.
+- Ask for a recording's cover picture, an event picture, or a recording's video. Each request announces a window of
+  parts the camera may send before it waits. For downloads the client acknowledges part numbers as it goes, in a
+  notification that names the last part received. A camera that is not acknowledged stalls.
+- End a session politely with a stop request before it hangs up.
+
+Two variations exist that tolpo detects and names but does not support. Some cameras reject the account password on
+port 8800 because they are in a mode where the app uses a token handed out by the cloud. Some answer on port 28800
+instead, with TLS and a pre-shared key. Both need secrets that do not come from the owner's own account.
+
+Two-way audio and live playback from the memory card use related requests. They are not implemented. Every shape in
+this paragraph was checked against fakes and the public descriptions, and the area page marks what no real camera of
+ours has confirmed.
 
 ## What the devices we tested use
 

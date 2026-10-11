@@ -85,6 +85,12 @@ def load_config(path: str | None = None) -> Config:
         email, password = data.get("email", ""), data.get("password", "")
 
     snapshots = os.environ["TOLPO_SNAPSHOTS"].split(",") if "TOLPO_SNAPSHOTS" in os.environ else cameras.get("snapshots", ())
+    try:
+        tier = int(os.environ.get("TOLPO_TIER", policy.get("tier", 1)))
+    except (TypeError, ValueError):
+        tier = -1
+    if not 0 <= tier <= 4:  # a typo must not widen what an agent may do, so the server does not start
+        raise ValueError("policy.tier (or TOLPO_TIER) must be a whole number from 0 to 4")
 
     return Config(
         email=os.environ.get("TAPO_EMAIL", email),
@@ -104,7 +110,7 @@ def load_config(path: str | None = None) -> Config:
         snapshots=_names(snapshots),
         ffmpeg=os.environ.get("TOLPO_FFMPEG", cameras.get("ffmpeg", "")),
         clip_dir=os.environ.get("TOLPO_CLIP_DIR", cameras.get("clip_dir", "")),
-        tier=int(os.environ.get("TOLPO_TIER", policy.get("tier", 1))),
+        tier=tier,
         allow_methods=frozenset(policy.get("allow_methods", ())),
         areas=_names(os.environ["TOLPO_AREAS"].split(",") if "TOLPO_AREAS" in os.environ else server.get("areas", ())),
     )

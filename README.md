@@ -27,13 +27,22 @@ It ships two interfaces over the same core:
   `is any door open?`).
 - An **HTTP API** with an OpenAPI description at `/docs`, for scripts and dashboards.
 
+The aim is that everything the Tapo app can do on your network can also be done by the agent: lights, plugs,
+hubs and their sensors, cameras, doorbells, robot vacuums, schedules, firmware, rooms, pairing, and even what
+the devices say to the internet. That is a lot of power, so every action has a level, and only the first
+levels are on until you raise them. See [What an agent can do](#what-an-agent-can-do) and the
+[Security model](#security-model).
+
 ## Features
 
 - **One view of the whole house.** Lights, plugs, the H100/H200 hub and its sensors, cameras and the
   doorbell, each with live state and a clear list of what can be changed.
-- **Safe by default.** Reads are broad; writes are limited to power, brightness and color unless you
-  opt in. Cameras, pairing and hub alarms stay read-only. Wi-Fi names and Matter and HomeKit setup codes are
-  never returned. An agent sees a camera only if you name it.
+- **The Tapo app, as tools.** The parts of the app are split into areas, such as lights, plugs, cameras,
+  doorbells and the network. An area is on only if you own a device of that kind.
+- **Safe by default.** Every action has a level from 0 to 4. Reading and reversible control (power, brightness,
+  color) are on. Settings, security changes and things that are hard to undo, such as pairing or a factory reset,
+  stay off until you raise the level, and the last two kinds also need a confirmation phrase on every call.
+  Wi-Fi names, setup codes, passwords and tokens are never returned. An agent sees a camera only if you name it.
 - **Pictures from cameras.** A camera you enable gives an agent one still picture on request, through the same
   video channel the Tapo app uses. No extra camera account is needed.
 - **Built for real homes.** Discovery combines broadcast with a direct per-address sweep, remembers
@@ -53,13 +62,15 @@ what python-kasa documents as supported but we have not tried.
 |---|---|---|---|---|
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/light.svg" width="36" alt="Light bulb"> | Color bulbs | L430C | L430P, L530B, L530E, L530EA, L535E | State, brightness, white temperature and color |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/plug.svg" width="36" alt="Smart plug"> | Smart plugs | P115 | P110, P110M | State, plus power, voltage and current readings |
-| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/hub.svg" width="36" alt="Hub"> | Hubs | H200 | H100, and S200B and S200D buttons paired to a hub | The sensors paired to it show up as devices of their own. Its alarm and pairing stay blocked |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/hub.svg" width="36" alt="Hub"> | Hubs | H200 | H100, and S200B and S200D buttons paired to a hub | The sensors paired to it show up as devices of their own. With a higher level: siren, sensor settings, the event log, pairing |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/contact.svg" width="36" alt="Door and window sensor"> | Door and window sensors | T110 |  | Open or closed, low-battery flag |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/climate.svg" width="36" alt="Temperature and humidity sensor"> | Temperature and humidity sensors | T310 | T315 (the one with a display) | Temperature, humidity, low-battery flag |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
-| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. Settings are read-only. A still picture, for the cameras you enable |
-| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. Read-only |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. With a higher level: detection tuning, image and audio settings, pan and tilt, the memory card. Pictures and clips, for the cameras you enable |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. With a higher level: ring sounds, quick replies, anti-theft, wake-up |
+|  | Robot vacuums |  | Models python-kasa has a cleaning module for | Status, start and stop, rooms and zones, suction and water, schedules. Built from the app's protocol and not tried on real hardware |
+|  | Door locks |  | Not supported by python-kasa | Not usable yet. The DL100, DL105, DL110, DL130 and DLW10 speak a protocol python-kasa does not know. tolpo can parse their discovery record, and nothing is connected to it yet |
 
 The C610 and the C465 are not on python-kasa's list yet, but both connected fine. The C465 needs the small
 certificate fix in `compat.py`. The full upstream list is in
@@ -153,6 +164,7 @@ host = "127.0.0.1"          # loopback only; a token is required to bind elsewhe
 port = 8765
 # token = "a-long-random-string"
 # cache_ttl_seconds = 10
+# areas = ["lights", "plugs", "hub"]   # which parts offer tools; empty means every part for the devices you own
 
 [discovery]
 # subnets = ["192.168.1.0/24"]   # default: the /24 of your default-route interface
@@ -161,6 +173,10 @@ port = 8765
 interval_seconds = 600
 
 [policy]
+# The highest level of action an agent may use, from 0 to 4. See the Security model.
+tier = 1
+# Single device methods an agent may use above `tier`, for example ["setLedStatus"].
+allow_methods = []
 # Features an agent may write beyond power, brightness and color.
 # Plain ids ("pan_left") or kind-qualified ones ("camera.state").
 allow_write = []
@@ -172,7 +188,16 @@ snapshots = []                    # for example ["Hallway Cam"]
 # username = "camera-account-name"
 # password = "camera-account-password"
 # ffmpeg = "/opt/homebrew/bin/ffmpeg"   # only if ffmpeg is not on your PATH
+# clip_dir = "/Users/you/tolpo-clips"   # the one folder where camera clips may be saved; no folder, no clips
 ```
+
+Environment variables override the file: `TOLPO_TIER`, `TOLPO_AREAS` (names separated by commas), `TOLPO_SNAPSHOTS`,
+`TOLPO_CLIP_DIR` and `TOLPO_FFMPEG`. A `tier` that is not a whole number from 0 to 4 stops the server from starting.
+
+Two parts keep their own files, so that no secret ends up in the main one. Automation keeps its rules and alert
+outbox in `~/.local/state/tolpo` (change it with `TOLPO_STATE_DIR`). The network area reads
+`~/.config/tolpo/network.toml`, which names the environment variable that holds each router password and never
+holds the password itself.
 
 Verify your setup with a read-only scan: `npx -y tolpo scan`, or `.venv/bin/tolpo scan` from a source checkout.
 
@@ -212,6 +237,38 @@ temperature upstairs?".
 Read tools are marked read-only and `set_feature` is marked destructive, so MCP clients can ask for
 confirmation where it matters. Responses are compact: all the devices of a typical home fit in under a
 thousand tokens.
+
+## What an agent can do
+
+The Tapo app is split into areas. Each area is a group of MCP tools with its own page that lists every tool.
+An area is on only if you own a device of that kind, so a house without a vacuum never sees vacuum tools. Pick the
+areas yourself with `areas` under `[server]`, or `TOLPO_AREAS`. The tool `tolpo_areas` tells an agent what is on.
+
+| Area | What it covers | Tools |
+|---|---|---:|
+| [lights](https://github.com/signerless/tolpo/blob/main/docs/areas/lights.md) | Bulbs and strips: effects, presets, schedules, countdowns, Away Mode, power-on defaults | 19 |
+| [plugs](https://github.com/signerless/tolpo/blob/main/docs/areas/plugs.md) | Plugs and switches: schedules, countdowns, energy history, electricity price, auto-off, protections | 21 |
+| [hub](https://github.com/signerless/tolpo/blob/main/docs/areas/hub.md) | Hubs, sensors and radiator valves: siren, sensor settings, the door, leak, motion and button event log | 29 |
+| [doorbell](https://github.com/signerless/tolpo/blob/main/docs/areas/doorbell.md) | Video doorbells and chimes: ring sounds, quick replies, anti-theft, wake-up, battery mode | 17 |
+| [camera_detection](https://github.com/signerless/tolpo/blob/main/docs/areas/camera_detection.md) | Motion, person, pet and vehicle detection, zones, schedules, alarm and spotlight, what warns you | 17 |
+| [camera_system](https://github.com/signerless/tolpo/blob/main/docs/areas/camera_system.md) | Pan and tilt, image, audio, battery, privacy mode, UPnP, firmware, reboot | 33 |
+| [camera_media](https://github.com/signerless/tolpo/blob/main/docs/areas/camera_media.md) | Memory card, record plan, recording index, thumbnails of past events, clips saved to a folder | 11 |
+| [vacuum](https://github.com/signerless/tolpo/blob/main/docs/areas/vacuum.md) | Robot vacuums: status, start and stop, rooms and zones, suction and water, schedules, wear counters | 27 |
+| [lock](https://github.com/signerless/tolpo/blob/main/docs/areas/lock.md) | Door locks: read the state from the discovery record. Not usable yet | 1 |
+| [device_admin](https://github.com/signerless/tolpo/blob/main/docs/areas/device_admin.md) | Names, clock, LED, firmware, and tolpo's own rooms and groups | 24 |
+| [automation](https://github.com/signerless/tolpo/blob/main/docs/areas/automation.md) | A local rule engine in place of Smart Actions: triggers, conditions, actions and an alert outbox | 10 |
+| [pairing](https://github.com/signerless/tolpo/blob/main/docs/areas/pairing.md) | Pair and remove hub devices, join Wi-Fi, reboot and factory reset. Needs level 4 | 9 |
+| [network](https://github.com/signerless/tolpo/blob/main/docs/areas/network.md) | What each device talks to, seen through your router, DNS server or firewall, and optional blocking. Needs level 4 to block | 10 |
+
+On top of these, `home_overview`, `list_devices`, `get_device`, `set_power`, `set_light`, `set_feature`,
+`camera_snapshot` and `rescan` work for every device.
+
+All the areas together are about 240 tools, which is about 40,000 tokens of descriptions. A client that loads every
+tool at once can use `areas` to keep only what it needs.
+
+Most of this was built from analysis of the Tapo app and tested against simulated devices. Each area page says
+which parts were tried on real devices and which were not. Where the exact form of a request was a guess, the
+page marks it `UNVERIFIED`, and the tool refuses when the device does not report support for it.
 
 ## Usage over HTTP
 
@@ -282,20 +339,46 @@ What to know before you turn it on:
   it for a moment.
 - The doorbell sits behind the hub and has no stream of its own, so it gives no picture.
 
+The `camera_media` area builds on this. It can read the memory card and its recording index, return the thumbnail
+of a past event, take a short run of pictures from the live stream, and save a recording to the one folder you set
+as `clip_dir`. It follows the same rules: only cameras you named, never in privacy mode, and the tool that saves a
+clip returns the path and never the video. Formatting a card is a level 4 action.
+
 ## Security model
 
 This server controls physical things, so it refuses by default and widens only on request.
 
+Every action on a device has a level. You choose the highest level an agent may use with `tier` under `[policy]`
+(1 by default), and you can allow single device methods above it with `allow_methods`.
+
+| Level | Name | What it is | Examples |
+|---|---|---|---|
+| 0 | Read | Look at anything that is not secret | State, settings, energy, event logs, a memory card index |
+| 1 | Control | Reversible, as you would do by hand | Power, brightness, color, a camera sweep, vacuum start and stop |
+| 2 | Setting | Changes behavior | Schedules, detection tuning, defaults, renaming, automation rules |
+| 3 | Security | Matters for safety or privacy | Camera privacy mode, a siren, alarm and arm state, a camera light turned off, UPnP, audio out |
+| 4 | Lifecycle | Hard to undo | Pairing and removing devices, factory reset, firmware install, Wi-Fi change, firewall changes, formatting a memory card |
+
+Levels 3 and 4 also need a confirmation phrase on every call, such as `setLedStatus hallway-cam`. The refusal says
+what the phrase is. The phrase names the action and the device, so one confirmation cannot be reused for another
+device or another action. A refusal says what the action is, and never how to widen the permission.
+
 | Scope | Allowed |
 |---|---|
-| Read | Every feature of every device, except the Wi-Fi name and the Matter and HomeKit setup codes, which are never returned |
-| Write by default | Power, brightness, color temperature, color and light presets, on lights and plugs |
-| Write on opt-in | Anything else, named in `policy.allow_write` (alarm test, pan/tilt, detection switches, reboot) |
+| Read | Everything that is not secret. The Wi-Fi name, setup codes, passwords, tokens, keys and MAC addresses are never returned |
+| Control | Power, brightness, color temperature, color and light presets, on lights and plugs, at level 1 |
+| More | Whatever level you allow with `tier`, or single methods named in `allow_methods` |
+| Features | Anything else written through `set_feature`, named in `policy.allow_write` (alarm test, pan/tilt, detection switches) |
 | Pictures | Only from the cameras named in `cameras.snapshots`. Off by default |
-| Never | `pair` and `unpair` on the hub |
+| Pairing | Only through the pairing tools, at level 4. The hub `pair` and `unpair` features stay blocked in `set_feature` |
 
-Cameras are read-only: the `state` switch on a camera is its privacy shutter, not a power relay, so it
-is not treated as one. Enable it deliberately with `allow_write = ["camera.state"]`.
+Cameras are read-only through `set_feature`: the `state` switch on a camera is its privacy shutter, not a power
+relay, so it is not treated as one. Enable it deliberately with `allow_write = ["camera.state"]`, or use the
+privacy tool at level 3.
+
+Rules that run without anyone asking (automation) are held to the same levels at the moment they run, not only when
+they are made. Setting them up needs level 2. An agent can stop all rules at any time, but starting them again
+needs level 3 and a phrase. You can do it yourself with `tolpo automation resume`.
 
 The server listens on `127.0.0.1` only. It refuses to start on any other address without a bearer
 token, and without a token it also rejects requests whose `Host` header is not local, which blocks
@@ -329,7 +412,8 @@ device, so an agent does not mistake an offline door sensor for a closed door.
 
 ## For AI agents
 
-If you are an AI agent asked to set tolpo up or to use it, start with
+Call `tolpo_areas` first. It lists the parts of tolpo that are on, what each one offers, and the level the owner
+allows. If you are an AI agent asked to set tolpo up or to use it, start with
 [llms.txt](https://raw.githubusercontent.com/signerless/tolpo/main/llms.txt). If you are asked to change the code,
 read [AGENTS.md](https://github.com/signerless/tolpo/blob/main/AGENTS.md) first.
 
@@ -353,9 +437,15 @@ src/tolpo/
   snapshot.py    one picture from a camera, taken with ffmpeg
   media.py       the video channel of the Tapo app (port 8800)
   tsvideo.py     finds the video track in a camera's stream
-  cli.py         serve / mcp / scan / snapshot / watch entry points
+  calls.py       the one way an area sends a method to a device, checked against its level
+  provision.py   Wi-Fi setup of a new device from this machine (SoftAP), behind a plan
+  areas/         one file per area of the Tapo app; adding an area adds a file
+  automation/    the local rule engine
+  network/       providers for routers, DNS servers and firewalls
+  cli.py         serve / mcp / scan / snapshot / watch / automation entry points
 tests/           full suite against simulated devices
 docs/protocols.md  how Tapo devices talk on the local network
+docs/areas/      one page per area, with every tool and what was only tried with simulated devices
 assets/          logo, device icons and social preview
 ```
 
@@ -373,13 +463,20 @@ only ever signs in with your own Tapo account.
 
 ## Compatibility and status
 
-Version 0.1. Lights, plugs, hubs and sensors are fully supported over the KLAP and SSL-AES transports
-through `python-kasa`, plus a small patch (`compat.py`) for cameras with an ECDSA certificate, such as
+This is a development version after 0.1. Lights, plugs, hubs and sensors are supported over the KLAP and SSL-AES
+transports through `python-kasa`, plus a small patch (`compat.py`) for cameras with an ECDSA certificate, such as
 the C465, that `python-kasa` cannot reach on its own.
 
-Known limits: cameras give still pictures but no continuous video, and the doorbell gives none; the settings of
-cameras and the doorbell are read-only; the MCP server runs over stdio, one process per client, with no shared
-HTTP transport yet; and devices on a second subnet have not been tested.
+The areas beyond the first release were built from analysis of the Tapo app and tested with simulated devices.
+Reading has been tried on a real home with a hub, sensors, a doorbell, three cameras, a plug and four bulbs. Most
+writes have not been tried on real hardware, and the area pages say which. Robot vacuums, door locks and the
+firewall providers were never tried on the real thing.
+
+Known limits: cameras give still pictures, short runs of pictures and saved clips, but no continuous video to an
+agent, and the doorbell gives none; the cloud-only parts of the app (account, homes, sharing, push notifications,
+Tapo Care, voice assistants) are not reachable, and the automation area replaces some of them locally; the MCP
+server runs over stdio, one process per client, with no shared HTTP transport yet; the HTTP API has the original
+small set of routes, and the new areas are MCP tools; and devices on a second subnet have not been tested.
 
 ## License
 

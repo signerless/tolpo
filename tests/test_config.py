@@ -59,3 +59,27 @@ def test_jsonable():
 
     assert jsonable(datetime.datetime(2026, 1, 2, 3, 4)) == "2026-01-02T03:04:00"
     assert jsonable((1, 2)) == [1, 2] and jsonable(Color.RED) == "RED" and jsonable(None) is None
+
+
+@pytest.mark.parametrize("value", ["5", "-1", "high", "1.5", ""])
+def test_a_level_outside_0_to_4_stops_the_server_from_starting(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("TOLPO_TIER", value)
+    with pytest.raises(ValueError, match="0 to 4"):
+        load_config(str(tmp_path / "missing.toml"))
+    path = tmp_path / "config.toml"
+    monkeypatch.delenv("TOLPO_TIER")
+    path.write_text(f"[policy]\ntier = {value if value.lstrip('-').isdigit() else repr(value)}\n")
+    if value not in ("1.5", ""):
+        with pytest.raises(ValueError, match="0 to 4"):
+            load_config(str(path))
+
+
+@pytest.mark.parametrize("value, expected", [("0", 0), ("1", 1), ("3", 3), ("4", 4)])
+def test_the_levels_0_to_4_are_accepted_from_the_environment_and_the_file(tmp_path, monkeypatch, value, expected):
+    monkeypatch.setenv("TOLPO_TIER", value)
+    assert load_config(str(tmp_path / "missing.toml")).tier == expected
+    monkeypatch.delenv("TOLPO_TIER")
+    path = tmp_path / "config.toml"
+    path.write_text(f"[policy]\ntier = {value}\n")
+    assert load_config(str(path)).tier == expected
+    assert load_config(str(tmp_path / "missing.toml")).tier == 1  # the default
