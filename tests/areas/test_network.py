@@ -149,6 +149,14 @@ def test_conntrack_original_direction_ipv6_and_missing_counters():
     assert flows[1].protocol == "udp" and flows[1].bytes_up is None
 
 
+def test_conntrack_matches_uncompressed_ipv6_from_proc():
+    # The kernel's /proc file prints IPv6 in full form. A miss would hide flows and skip state clearing.
+    full = "2001:0db8:0000:0000:0000:0000:0000:0010"
+    flows = conntrack(CT6.replace(f"src={ADDR6} ", f"src={full} "), CLIENT, "router", NOW)
+    assert len(flows) == 1 and flows[0].client == ADDR6
+    assert conntrack("ipv4 2 tcp 6 src=bad dst=203.0.113.20 dport=1\n", CLIENT, "router", NOW) == []
+
+
 @pytest.mark.anyio
 async def test_openwrt_ubus_login_hints_and_fixed_file_read():
     seen = []

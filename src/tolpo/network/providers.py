@@ -162,13 +162,20 @@ def conntrack(text_output: str, client: Client, source: str, now: float) -> list
             if "=" in token:
                 key, value = token.split("=", 1)
                 values.setdefault(key, []).append(value)
-        if not values.get("src") or values["src"][0] not in client.addresses:
+        if not values.get("src"):
+            continue
+        # /proc/net/nf_conntrack prints IPv6 uncompressed (%pI6). Normalize before matching.
+        try:
+            src = ip(values["src"][0])
+        except NetworkError:
+            continue
+        if src not in client.addresses:
             continue
         if not values.get("dst") or not protocol:
             raise NetworkError("Unsupported conntrack record")
         size = values.get("bytes", [])
         packets = values.get("packets", [])
-        result.append(Flow(values["src"][0], ip(values["dst"][0]), port(values.get("dport", [0])[0]), protocol,
+        result.append(Flow(src, ip(values["dst"][0]), port(values.get("dport", [0])[0]), protocol,
                            last_seen=now, bytes_up=count(size[0]) if size else None,
                            bytes_down=count(size[1]) if len(size) > 1 else None,
                            packets=sum(int(p) for p in packets) if packets else None,
