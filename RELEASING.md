@@ -39,8 +39,16 @@ Only the owner of the npm account can do this.
    npm publish
    ```
 
-   npm asks for a one-time code from your authenticator. A published version can never be replaced, only
-   deprecated, so check the file list first.
+   npm may stage the release instead of publishing it, depending on your account settings. A staged release is
+   not public until you approve it with two-factor authentication. For a name that is new to npm it also leaves
+   a public placeholder with the version `0.0.0-stage`, which is normal. If `npm view tolpo version` still
+   shows `0.0.0-stage`, approve the staged release:
+
+   - On the web: open the package on npmjs.com, go to the Staged Packages tab, review the release and click Approve.
+   - Or in the terminal: `npm stage list tolpo`, then `npm stage approve <stage-id>`. This needs npm 11.15 or
+     newer and Node 22.14 or newer.
+
+   A published version can never be replaced, only deprecated, so check the file list first.
 
 4. Tag the release. This runs the verification workflow, which checks that the tag matches the versions:
 
