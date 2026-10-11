@@ -30,7 +30,7 @@ Trigger kinds:
 - `sunrise` and `sunset`: Use configured latitude, longitude and timezone. `offset_minutes` shifts the event. Polar days without the selected event do not fire. The offline calculation is approximate.
 - `state`: A `predicate` fires on a changed reading that satisfies it. Optional hold time waits for the changed state to remain true.
 - `sensor`: `device` identifies the sensor or button whose hub log is read. Optional `event` matches the exact log event string.
-- `camera`: `device` identifies the camera. A changed `last_alert_timestamp` fires; optional `event` matches `last_alert_type`.
+- `camera`: `device` identifies the camera. A changed `last_alert_timestamp` fires; optional `event` matches `last_alert_type` without regard to case (tolpo reports python-kasa's `Motion`). python-kasa gives these features to Wi-Fi cameras only, not to cameras or doorbells behind a hub.
 - `rule`: `rule` identifies another rule. It fires after that rule finishes successfully.
 
 The first state, camera and log poll establishes a baseline. Historical events are not replayed.
@@ -50,8 +50,8 @@ Actions run in order:
 - `delay`: Wait `seconds` before the following action. A delay cannot be the last action.
 - `message`: Add a short `message` to the owner's outbox.
 
-For tool actions, this area records tiers as later areas register their tools. Earlier tools without an exact tier use conservative levels: read 0, ordinary write 2, destructive write 4. Built-in power and light use level 1. Tools needing request context or resolver interaction are unavailable to unattended rules. A custom `ToolExecutor` adapter can integrate other host tools, but must recheck their policy on execution.
-Security and lifecycle actions require a fresh confirmation passed to `automation_tick`. For methods, the phrase is `<method> <device slug>`. For tools, pass the phrase required by the tool's guarded caller. Confirmations are never stored. Background execution cannot confirm these actions. Delayed execution does not retain a previous confirmation. A direct tick can supply a new confirmation for a due action.
+For tool actions, this area records tiers as later areas register their tools. Earlier tools without an exact tier use conservative levels: read 0, ordinary write 2, destructive write 4. Built-in power and light use level 1. A tool runs only at or below the owner's level: `allow_methods` names device methods and never unlocks a tool. Tools needing request context or resolver interaction are unavailable to unattended rules. A custom `ToolExecutor` adapter can integrate other host tools, but must recheck their policy on execution.
+Security and lifecycle actions require a fresh confirmation passed to `automation_tick`. For methods, the phrase is `<method> <device slug>`. For tools, pass the phrase required by the tool's guarded caller. Confirmations are never stored. Background execution cannot confirm these actions. Delayed execution does not retain a previous confirmation. A direct tick can supply a new confirmation for a due action. One confirmation runs at most one security or lifecycle action, even when several are due in the same tick.
 Power and light also require level 1 and the registry's feature policy. Their targets must be lights, plugs or switches. An opt-in camera state feature cannot turn these actions into a privacy change. A method or tool exception stops that run, appears in tick results, and is recorded in the outbox by exception type and target. Raw device errors and method responses are not exposed.
 
 Example:
@@ -77,20 +77,21 @@ The version 1 rule store is `~/.local/state/tolpo/automation.json`. `TOLPO_STATE
 Writes use a private temporary file, fsync and atomic replace. Invalid or unknown store versions fail closed.
 Delayed action cursors, due times, cooldowns and consumed clock minutes survive restart.
 Actions reserve their cursor before execution. A crash can skip an action, but does not deliberately replay it. This is at-most-once attempt behavior, not guaranteed delivery.
-Use one tolpo server process per state directory. Concurrent processes and external edits are not coordinated.
+Only one tolpo process runs the background loop for a state directory. It holds a lock on `automation.lock`; a second process logs a warning and does not evaluate rules, so actions never fire twice. Rule edits made from two processes at once are still not merged, so keep one server per state directory.
 
 Rule reference cycles are rejected at creation. Runtime ancestor chains and minimum intervals provide another guard.
 A rule with pending delayed actions cannot queue another run. Disabling or deleting it cancels those actions.
-Set `killed: true` with `automation_settings` to stop the loop, discard all pending runs and block manual ticks.
+Set `killed: true` with `automation_settings` to stop the loop, discard all pending runs and block manual ticks. The kill stops a running tick at once, even in the middle of a slow device call, and the remaining actions of that tick do not run. An engine in another tolpo process obeys a kill saved in the state file at its next tick. Any agent that can call `automation_settings` can also clear the switch.
 Settings replace the full settings object, so include any timezone, location or quiet hours you want to keep.
 
 Messages and failures append to `automation-alerts.jsonl` in the same directory.
 An MCP client can poll `automation_alerts` with `clear: true` and `limit: 100`, then deliver the returned records through its own owner-approved channel. There are no Tapo push notifications.
 Quiet hours use the same window shape. Messages generated during quiet hours carry `quiet: true`; they remain in the outbox. The client should defer their delivery until the configured quiet period ends. Operational failures remain visible during quiet hours.
-The JSONL file also lets a local owner process consume alerts. Coordinate consumers so that only one clears records.
+The JSONL file also lets a local owner process consume alerts. Coordinate consumers so that only one clears records. The outbox keeps about 1 MiB. Past that, the oldest records are dropped and an `AlertsDropped` record says how many.
+The state file, the outbox and the lock file are created with mode 0600. tolpo refuses to read or write any of them through a symbolic link.
 
 Everything here was tested with fake devices and injectable clocks. No live network calls were made.
-Hub logs follow python-kasa's sensor log shape (`logs` with `id`, `eventId`, `timestamp`, `event`). Real fixture files were unavailable at build time. UNVERIFIED: direct hub and switch support for `get_trigger_logs` needs model-specific hardware checks. Verify `get_trigger_logs` on hub children and button event names on hardware. Verify camera last-alert feature availability and power/light writes for each model.
+On the owner's T110, T300 and T310 sensors behind an H200, `get_trigger_logs` with `start_id: 0` answers `{"logs": [], "start_id": 0, "sum": 0}`. The H200 hub itself refuses the method, so it is declared for sensors and switches only. UNVERIFIED: every captured log was empty, so the row shape (`id`, `eventId`, `timestamp`, `event`) comes from python-kasa, and event names are unknown. UNVERIFIED: button switches behind a hub. Verify both on hardware. Verify camera last-alert feature availability and power/light writes for each model.
 The local engine substitutes for cloud Smart Actions. Device-native schedules, countdowns, Away mode, heating schedules and camera schedules are outside this package. Their writes need captured parameter shapes or their owning areas.
 Geofencing, cloud sync, voice assistants, AI actions and push delivery are not implemented.
 
