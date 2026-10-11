@@ -8,7 +8,7 @@ brightness control does not go through the caller at all (it uses python-kasa's 
 from .. import policy
 from ..policy import Tier
 
-SMART_KINDS = ["light", "plug", "switch", "sensor", "hub", "vacuum", "thermostat", "valve", "chime", "lock"]
+SMART_KINDS = ["light", "plug", "switch", "sensor", "hub", "vacuum", "thermostat", "valve", "chime"]  # not "lock": a lock has no declared methods on purpose
 CAMERA_KINDS = ["camera", "doorbell"]
 
 METHODS = [

@@ -340,3 +340,10 @@ def test_the_owners_choice_beats_the_guess(tmp_path):
                                           ("T310", "sensor"), ("Z1", None)])
 def test_models_map_to_kinds(model, kind):
     assert areas.kind_of_model(model) == kind
+
+
+def test_a_door_lock_has_no_method_declared_anywhere():
+    """Lock and unlock need a per-device control key tolpo does not touch, so every lock method is refused. Found in review:
+    the shared declarations once included locks and would have allowed set_device_info on them at level 2."""
+    areas.declare_methods()
+    assert [rule.method for rule in policy.declared_methods() if "lock" in rule.kinds] == []
