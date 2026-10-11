@@ -124,7 +124,7 @@ READS = {
     "battery_mode": [("getBatteryOperatingMode", "battery", "operating", ("mode", "follow_config"))],
     "button_led": [("getLedColor", "led", "color", ("name",))],
 }
-Setting = Literal["ring", "hub_ring", "hub_plan", "chime_plan", "existing_chime", "auto_response", "anti_theft", "wake_up", "battery_mode", "button_led"]
+Setting = Literal["ring", "hub_ring", "hub_plan", "chime_plan", "existing_chime", "quick_replies", "auto_response", "anti_theft", "wake_up", "battery_mode", "button_led"]
 RingTarget = Literal["doorbell", "hub"]
 BatteryMode = Literal["monitor_performance_first", "battery_life_first", "super_power_saving"]
 METHODS += [policy.method(method, Tier.READ, ["doorbell"], "Read a doorbell setting.") for specs in READS.values() for method, _, _, _ in specs]
@@ -158,8 +158,10 @@ METHODS += [
 
 
 async def read_setting(registry, caller, device, setting, legacy=False):
-    _choice(setting, READS, "setting")
+    _choice(setting, (*READS, "quick_replies"), "setting")
     _boolean(legacy, "legacy")
+    if setting == "quick_replies":
+        return {**await quick_replies(registry, caller, device), "setting": setting}
     entry = _entry(registry, device, ["doorbell"])
     data = {}
     for method, module, section, fields in READS[setting]:
@@ -524,7 +526,7 @@ def tools(ctx):
         setting: Annotated[Setting, Field(description="Which doorbell setting to read")],
         legacy: Annotated[bool, Field(description="Use older read wrappers for ring, anti-theft and wake-up", strict=True)] = False,
     ) -> dict[str, Any]:
-        """Read ring, hub/chime plan, in-wall chime, auto response, anti-theft, wake-up, battery mode or button LED. UNVERIFIED on hardware."""
+        """Read ring, hub/chime plan, in-wall chime, stored voice replies, auto response, anti-theft, wake-up, battery mode or button LED. UNVERIFIED on hardware."""
         await ctx.ready_for([device])
         with ctx.translated():
             return await read_setting(ctx.registry, ctx.caller, device, setting, legacy)
@@ -590,13 +592,6 @@ def tools(ctx):
         await ctx.ready_for([device])
         with ctx.translated():
             return await existing_chime(ctx.registry, ctx.caller, device, chime_type, ring_length, confirm)
-
-    @ctx.tool(title="List doorbell quick replies")
-    async def doorbell_quick_replies(device: Device) -> dict[str, Any]:
-        """List compact stored voice reply ids and names. UNVERIFIED on hardware."""
-        await ctx.ready_for([device])
-        with ctx.translated():
-            return await quick_replies(ctx.registry, ctx.caller, device)
 
     @ctx.tool(title="Play or stop quick reply", tier=Tier.SECURITY)
     async def doorbell_quick_reply(

@@ -8,13 +8,12 @@ id confirmation phrase on every call. Every successful write refreshes device st
 - `chime_settings_get`: Read a paired doorbell's chime tone, volume, duration, enable state and available tones.
 - `chime_settings_set`: Set those per-doorbell chime settings at level 2.
 - `chime_sound`: Play or stop a standalone chime or H100 sound at level 3 with confirmation.
-- `doorbell_settings_get`: Read ring settings, hub/chime plans, in-wall chime, auto response, anti-theft, wake-up, battery mode or button color.
+- `doorbell_settings_get`: Read ring settings, hub/chime plans, in-wall chime, stored voice replies, auto response, anti-theft, wake-up, battery mode or button color.
 - `doorbell_ring_sound_set`: Set the doorbell or connected hub ring tone and volume at level 2.
 - `doorbell_ring_enabled_set`: Enable or disable ringing at the doorbell or its connected hub at level 2.
 - `doorbell_ring_preview`: Play or stop a ring preview at the doorbell or its connected hub at level 3.
 - `doorbell_ring_plan_set`: Set one hub or paired-chime ring window at level 2.
 - `doorbell_existing_chime_set`: Set the type and ring length of an in-wall chime at level 3.
-- `doorbell_quick_replies`: List stored voice reply ids, names, durations and read-only flags.
 - `doorbell_quick_reply`: Play or stop a visitor voice reply at level 3.
 - `doorbell_auto_response_set`: Switch automatic voice replies on or off, or choose the reply and its delay, at level 2. One change per call.
 - `doorbell_anti_theft_set`: Arm or disarm the anti-theft alarm at level 3 with confirmation.
@@ -70,6 +69,7 @@ The API bounds ring length to 0 through 10. UNVERIFIED: length units, valid per-
 use a default. The app uses zero during installation. Verify `getExistingChimeCfg` and `setExistingChimeCfg` on a wired
 model using its installed chime specifications. Confirm with `setExistingChimeCfg DEVICE_ID`. Bypass setup is deferred.
 
+`doorbell_settings_get` with `quick_replies` lists stored voice reply ids, names, durations and read-only flags.
 Voice play and automatic replies require an id listed by `getQuickRespList`. Playback does not force replacement of
 another reply. Confirm with `playQuickResp DEVICE_ID` or `stopQuickResp DEVICE_ID`. Check table shape, audible reply and
 stop behavior on a real doorbell. Auto response configuration and enable are separate device settings. The tool takes

@@ -236,7 +236,7 @@ TOOL_CASES = [
     ("doorbell_ring_plan_set", {"device": "front-bell", "target": "hub", "enabled": True, "schedule": "0900-1700,127"}, 2, "setHubRingPlan"),
     ("doorbell_ring_plan_set", {"device": "front-bell", "target": "chime", "enabled": False, "schedule": "0000-0000,127"}, 2, "setChimeRingPlan"),
     ("doorbell_existing_chime_set", {"device": "front-bell", "chime_type": "mechanical", "ring_length": 0, "confirm": "setExistingChimeCfg front-bell"}, 3, "setExistingChimeCfg"),
-    ("doorbell_quick_replies", {"device": "front-bell"}, 0, "getQuickRespList"),
+    ("doorbell_settings_get", {"device": "front-bell", "setting": "quick_replies"}, 0, "getQuickRespList"),
     ("doorbell_quick_reply", {"device": "front-bell", "action": "play", "reply_id": "1", "confirm": "playQuickResp front-bell"}, 3, "playQuickResp"),
     ("doorbell_quick_reply", {"device": "front-bell", "action": "stop", "confirm": "stopQuickResp front-bell"}, 3, "stopQuickResp"),
     ("doorbell_auto_response_set", {"device": "front-bell", "reply_id": "1", "delay": 5}, 2, "setSmartRespConfig"),
@@ -396,6 +396,7 @@ async def test_quick_reply_compact_output_and_empty_fields(make_house):
     assert out == {"device": "front-bell", "unverified": True, "replies": [{"id": "1", "index": "0", "name": "Hello visitor", "duration": "3", "read_only": "1"}]}
     caller.respond("getQuickRespList", {"quick_response": {"quick_resp_audio": []}})
     assert "replies" not in await doorbell.quick_replies(reg, caller, "front-bell")
+    assert await doorbell.read_setting(reg, caller, "front-bell", "quick_replies") == {"device": "front-bell", "unverified": True, "setting": "quick_replies"}
 
 
 async def test_smartcam_hub_per_doorbell_chime_wrapper(make_house):
