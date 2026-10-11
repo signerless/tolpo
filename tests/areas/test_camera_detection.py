@@ -1701,3 +1701,18 @@ async def test_event_codes_from_device_stay_small(make_house, raw):
     assert result["last"]["timestamp"] == 1700000000
     assert len(str(result)) < 120
     assert result["last"].get("code", 0) <= 9999 and result["last"]["type"] in set(area.EVENT_TYPES.values()) | {"unknown"}
+
+
+@pytest.mark.parametrize("flag,settings", [
+    ("alarm_volume_support", {"alarm_volume": 5}),
+    ("alarm_duration_support", {"alarm_duration": 60}),
+    ("red_blue_light_alarm_support", {"light_rbl_enabled": True}),
+])
+async def test_alarm_support_flag_off_refuses_even_with_a_range(make_house, flag, settings):
+    reg, caller, _ = house(make_house)
+    alarm_responses(caller)
+    # Everything else is reported, including alarm_volume_range, so only the flag can refuse.
+    caller.responses[(None, "getAlertConfig")]["msg_alarm"]["capability"][flag] = "off"
+    with pytest.raises(BadRequest, match="does not support"):
+        await area.alarm_set(reg, caller, CAM, settings, f"setAlertConfig {CAM}")
+    assert "setAlertConfig" not in caller.methods_sent()
