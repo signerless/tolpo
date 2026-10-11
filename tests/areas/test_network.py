@@ -989,3 +989,16 @@ async def test_odd_router_output_refuses_plan_without_echo(make_house, tmp_path,
         await service.plan("block_internet", "desk-lamp", [], "test")
     assert "Ignore" not in str(error.value)
     assert not any(argv[:2] == ("nft", "-f") for argv, _ in kernel.calls)
+
+
+@pytest.mark.anyio
+async def test_requests_never_disable_tls_or_follow_redirects(monkeypatch):
+    seen = []
+    real = httpx.AsyncClient
+    def capture(**kwargs):
+        seen.append(kwargs)
+        return real(**kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", capture)
+    p = AdGuard(cfg("adguard"), transport=mock_http({("GET", "/control/status"): {"version": "fake"}}))
+    await p.health()
+    assert seen[0]["verify"] is True and seen[0]["follow_redirects"] is False and seen[0]["trust_env"] is False
