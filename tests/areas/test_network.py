@@ -484,6 +484,7 @@ class FakeLinux:
         self.fail_apply = False
         self.fail_rollback = False
         self.missing_drop = False
+        self.native_seconds = None  # Simulate a kernel that kept a different element timeout.
 
     def reader(self, path):
         return self.forward if path == "/proc/sys/net/ipv4/ip_forward" else self.ct
@@ -510,9 +511,9 @@ class FakeLinux:
                 raise NetworkError("Local network command failed")
             plan_id = re.search(r"table inet tolpo_([0-9a-f]{32})", stdin)[1]
             name = "tolpo_" + plan_id
-            seconds = int(re.search(r"timeout ([0-9]+)s", stdin)[1])
+            seconds = self.native_seconds or int(re.search(r"timeout ([0-9]+)s", stdin)[1])
             items = [{"table": {"family": "inet", "name": name, "comment": "tolpo:" + plan_id}},
-                     {"set": {"family": "inet", "table": name, "name": "targets", "type": "ether_addr", "flags": ["timeout"], "elem": [{"elem": {"val": IDENTITY, "expires": seconds * 1000}}]}},
+                     {"set": {"family": "inet", "table": name, "name": "targets", "type": "ether_addr", "flags": ["timeout"], "elem": [{"elem": {"val": IDENTITY, "timeout": seconds, "expires": seconds - 1}}]}},
                      {"chain": {"table": name, "name": "forward", "hook": "forward", "prio": -10}},
                      {"rule": {"table": name, "chain": "forward", "expr": [{"match": {"op": "==", "left": {"payload": {"protocol": "ether", "field": "saddr"}}, "right": "@targets"}}, {"drop": None}]}}]
             if self.missing_drop:
@@ -769,12 +770,14 @@ async def test_timer_cleanup_failure_is_visible_and_recoverable(make_house, tmp_
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("failure", ["apply", "verify", "local_after", "rollback"])
+@pytest.mark.parametrize("failure", ["apply", "verify", "long_expiry", "local_after", "rollback"])
 async def test_apply_failures_revert_and_failed_revert_stays_visible(make_house, tmp_path, failure):
     service, kernel, entry, now = writable(make_house, tmp_path)
     plan = await service.plan("block_internet", "desk-lamp", [], "test")
     if failure == "apply":
         kernel.fail_apply = True
+    elif failure == "long_expiry":
+        kernel.native_seconds = 3600
     elif failure == "verify":
         kernel.missing_drop = True
     elif failure in {"local_after", "rollback"}:

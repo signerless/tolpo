@@ -135,8 +135,11 @@ async def verify(provider, plan):
                    and item["table"].get("comment") == "tolpo:" + plan.id for item in items)
     sets = [item["set"] for item in items if item.get("set", {}).get("table") == name and item["set"].get("name") == "targets"]
     set_ok = len(sets) == 1 and sets[0].get("type") == "ether_addr" and "timeout" in sets[0].get("flags", [])
+    # UNVERIFIED: libnftables JSON appears to print element timeout and expires in whole seconds.
+    # A larger value than the reviewed window fails verification, which rolls the change back.
     element_ok = set_ok and any(isinstance(e, dict) and e.get("elem", {}).get("val") == plan.target.mac
-                               and 0 < e["elem"].get("expires", 0) <= plan.revert_seconds * 1000
+                               and 0 < e["elem"].get("expires", 0) <= plan.revert_seconds
+                               and e["elem"].get("timeout", plan.revert_seconds) == plan.revert_seconds
                                for e in sets[0].get("elem", []))
     chain_ok = any(item.get("chain", {}).get("table") == name and item["chain"].get("name") == "forward"
                    and item["chain"].get("hook") == "forward" and item["chain"].get("prio") == -10 for item in items)
