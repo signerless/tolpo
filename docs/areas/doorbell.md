@@ -23,7 +23,8 @@ id confirmation phrase on every call. Every successful write refreshes device st
 - `doorbell_button_color_set`: Change the button LED color name at level 2.
 
 All execution tests use fakes. No device or network connection was made during this build.
-Sanitized fixtures arrived during the build. The H200 `getSirenTypeList` response shape matches them. Read fixture data is distinct from testing a write. Every write remains UNVERIFIED on hardware.
+Sanitized fixtures arrived during the build. The H200 `getSirenTypeList` response shape matches them.
+Read fixture data is distinct from testing a write. Every write remains UNVERIFIED on hardware.
 The D230 fixture contains generic camera settings, but no ring, reply, wake-up or anti-theft response.
 There is no standalone chime fixture. All doorbell-specific response shapes remain UNVERIFIED.
 
@@ -97,5 +98,5 @@ Calls, talk, cloud push, call screens, Do Not Disturb, sharing, locks, firmware 
 Twenty deliberate mutations were checked in scratch source copies. Each change was verified with a diff, and each
 caused its targeted tests to fail. These covered owner levels, exact confirmations, method tiers, kind checks, hidden
 fields, raw error secrecy, text flattening, integer and boolean checks, plain text, choice and schedule validation,
-advertised tones, listed reply ids, strict MCP types, compound-action preflight, cached addresses, parent selection,
+advertised tones, listed reply ids, strict MCP types, cached addresses, parent selection,
 write refresh and the UNVERIFIED event label. The original files were unchanged by the mutation runs.
