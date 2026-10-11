@@ -62,10 +62,17 @@ for _method in ("getPersonDetectionCapability", "getBCDCapability", "getAlertCon
                 "getManualAlarmStatus", "getWhitelampCapability", "getWhitelampConfig", "getFloodlightCapability",
                 "getFloodlightConfig", "getLastAlarmInfo", "searchDetectionList", "getMsgPushEventList"):
     METHODS.append(policy.method(_method, Tier.READ, KINDS, "Read camera detection or alert information."))
-for _method in ("setWhitelampConfig", "setFloodlightConfig", "setMsgPushEventList"):
-    METHODS.append(policy.method(_method, Tier.SETTING, KINDS, "Change camera lighting or notification behavior."))
-for _method in ("setAlertConfig", "setAlertEventType", "doManualAlarm", "manualFloodlightOp", "setForceWhitelampState"):
-    METHODS.append(policy.method(_method, Tier.SECURITY, KINDS, "Change camera alarm actions that can sound or flash."))
+for _method in ("setWhitelampConfig", "setFloodlightConfig"):
+    METHODS.append(policy.method(_method, Tier.SETTING, KINDS, "Change camera light brightness or on time."))
+# Level 3: these sound or flash in the real world, or decide whether the owner is warned at all.
+METHODS.extend([
+    policy.method("setAlertConfig", Tier.SECURITY, KINDS, "Change whether and how the camera sounds or flashes when it detects something."),
+    policy.method("setAlertEventType", Tier.SECURITY, KINDS, "Choose which detections set off the camera's sound and light alarm."),
+    policy.method("setMsgPushEventList", Tier.SECURITY, KINDS, "Choose which detections make the camera notify the owner."),
+    policy.method("doManualAlarm", Tier.SECURITY, KINDS, "Start or stop the camera's siren and alarm light now."),
+    policy.method("manualFloodlightOp", Tier.SECURITY, KINDS, "Switch the camera's floodlight on or off now."),
+    policy.method("setForceWhitelampState", Tier.SECURITY, KINDS, "Switch the camera's spotlight on or off now."),
+])
 
 
 def _camera(registry, device):
@@ -835,14 +842,15 @@ def _other_tools(ctx):
         with ctx.translated():
             return await choices_get(ctx.registry, ctx.caller, device, notifications=True)
 
-    @ctx.tool(title="Change camera notification choice", tier=Tier.SETTING)
+    @ctx.tool(title="Change camera notification choice", tier=Tier.SECURITY)
     async def camera_detect_notifications_set(
         device: Annotated[str, Field(description="Camera or doorbell id or name")],
         event: Annotated[str, Field(description="Exact event name from camera_detect_notifications_get")],
         enabled: Annotated[bool, Field(description="Enable or disable the device-side notification for this event", strict=True)],
         interruption_level: Annotated[Literal["none", "general", "critical"] | None, Field(description="Optional device-reported notification urgency")] = None,
+        confirm: Annotated[str | None, Field(description="Required phrase: setMsgPushEventList <device id>")] = None,
     ) -> dict[str, Any]:
-        """Change one device-side notification choice at level 2. Preserve other types. No cloud push calls."""
+        """Change one device-side notification choice at level 3 with confirmation, because it decides whether the owner is warned. Preserve other types. No cloud push calls."""
         await ctx.ready_for([device])
         with ctx.translated():
-            return await choices_set(ctx.registry, ctx.caller, device, event, enabled, interruption_level, notifications=True)
+            return await choices_set(ctx.registry, ctx.caller, device, event, enabled, interruption_level, notifications=True, confirm=confirm)

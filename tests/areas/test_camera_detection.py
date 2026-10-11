@@ -246,9 +246,11 @@ async def test_event_choices_preserve_others_and_hide_fields(make_house, notific
     result = await area.choices_get(reg, caller, CAM, notifications)
     assert "SECRET" not in str(result) and result["choice_count"] == 2
     method = "setMsgPushEventList" if notifications else "setAlertEventType"
-    if not notifications:
+    # Both decide whether the owner is warned, so both need the phrase that names them.
+    for phrase in (None, f"setAlertConfig {CAM}", f"{method} other-device"):
         with pytest.raises(NeedsConfirmation):
-            await area.choices_set(reg, caller, CAM, "motion", False)
+            await area.choices_set(reg, caller, CAM, "motion", False, notifications=notifications, confirm=phrase)
+    assert method not in caller.methods_sent()
     result = await area.choices_set(reg, caller, CAM, "motion", False, "critical" if notifications else None, notifications, f"{method} {CAM}")
     module, section = ("msg_push", "msg_push_event") if notifications else ("msg_alarm", "msg_alarm_type")
     expected = [{"name": "motion", "enabled": "off", **({"interruption_level": "critical"} if notifications else {})}, {"name": "person", "enabled": "off"}]
@@ -297,7 +299,7 @@ WRITE_ACTIONS = [
     ("setFloodlightConfig", lambda r, c: area.lighting_set(r, c, CAM, "floodlight", 70)),
     ("setForceWhitelampState", lambda r, c: area.lighting_switch(r, c, CAM, "spotlight", True, f"setForceWhitelampState {CAM}")),
     ("manualFloodlightOp", lambda r, c: area.lighting_switch(r, c, CAM, "floodlight", True, f"manualFloodlightOp {CAM}")),
-    ("setMsgPushEventList", lambda r, c: area.choices_set(r, c, CAM, "motion", True, notifications=True)),
+    ("setMsgPushEventList", lambda r, c: area.choices_set(r, c, CAM, "motion", True, notifications=True, confirm=f"setMsgPushEventList {CAM}")),
 ]
 
 
@@ -430,7 +432,7 @@ TOOL_CASES = [
     ("camera_alarm_light_switch", {"light": "spotlight", "enabled": True, "confirm": f"setForceWhitelampState {CAM}"}, "setForceWhitelampState", 3),
     ("camera_events_recent", {}, "getLastAlarmInfo", 0),
     ("camera_detect_notifications_get", {}, "getMsgPushEventList", 0),
-    ("camera_detect_notifications_set", {"event": "motion", "enabled": False}, "setMsgPushEventList", 2),
+    ("camera_detect_notifications_set", {"event": "motion", "enabled": False, "confirm": f"setMsgPushEventList {CAM}"}, "setMsgPushEventList", 3),
 ]
 
 
@@ -1649,3 +1651,43 @@ async def test_reported_range_shapes_are_visible_without_secret_fields(make_hous
     assert "SECRET" not in str(result)
     await area.detection_set(reg, caller, CAM, "motion", sensitivity=100)
     assert caller.sent[-1][2] == {"motion_detection": {"motion_det": {"digital_sensitivity": "100"}}}
+
+
+LEVELS = {
+    0: {"getDetectionConfig", "getPersonDetectionConfig", "getLinecrossingDetectionRegion", "getAlertConfig", "getAlertEventType",
+        "getManualAlarmStatus", "getWhitelampConfig", "getFloodlightConfig", "getLastAlarmInfo", "searchDetectionList", "getMsgPushEventList"},
+    2: {"setDetectionConfig", "setTamperDetectionConfig", "setBCDConfig", "addDetectionRegion", "addIntrusionDetectionRegion",
+        "setIntrusionDetectionSchedule", "setLinecrossingDetectionSchedule", "setWhitelampConfig", "setFloodlightConfig"},
+    3: {"setAlertConfig", "setAlertEventType", "setMsgPushEventList", "doManualAlarm", "manualFloodlightOp", "setForceWhitelampState"},
+}
+
+
+def test_declared_levels_match_real_effect():
+    declared = {rule.method: int(rule.tier) for rule in area.METHODS}
+    for level, methods in LEVELS.items():
+        for method in methods:
+            assert declared[method] == level, method
+    # Anything that sounds, flashes or decides whether the owner is warned is level 3.
+    assert {m for m, t in declared.items() if t >= 3} == LEVELS[3]
+    assert all(rule.kinds == frozenset(area.KINDS) for rule in area.METHODS)
+
+
+SECURITY_ACTIONS = [
+    ("setAlertConfig", lambda r, c, p: area.alarm_set(r, c, CAM, {"enabled": True}, p)),
+    ("setAlertEventType", lambda r, c, p: area.choices_set(r, c, CAM, "motion", False, confirm=p)),
+    ("setMsgPushEventList", lambda r, c, p: area.choices_set(r, c, CAM, "motion", False, notifications=True, confirm=p)),
+    ("doManualAlarm", lambda r, c, p: area.manual_alarm(r, c, CAM, "stop", p)),
+    ("setForceWhitelampState", lambda r, c, p: area.lighting_switch(r, c, CAM, "spotlight", False, p)),
+    ("manualFloodlightOp", lambda r, c, p: area.lighting_switch(r, c, CAM, "floodlight", False, p)),
+]
+
+
+@pytest.mark.parametrize("method,action", SECURITY_ACTIONS)
+async def test_level_two_owner_cannot_run_security_actions_even_with_phrase(make_house, method, action):
+    reg, caller, _ = house(make_house, tier=2)
+    alarm_responses(caller)
+    with pytest.raises(Forbidden, match="level 3") as error:
+        await action(reg, caller, f"{method} {CAM}")
+    assert "allow_methods" not in str(error.value) and "tier" not in str(error.value)
+    assert method not in caller.methods_sent()
+    reg.refresh.assert_not_awaited()
