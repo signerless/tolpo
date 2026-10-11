@@ -98,5 +98,6 @@ need cloud URLs. No app keys, credentials or code are reproduced.
 Real-device verification must check the camelCase methods on the specific model,
 start and pause versus resume behavior, the stop command, zone coordinate
 units, preset and task group starts, module-dependent dock and mop reads, schedule day
-and time encoding and conflict behavior, and quiet-hour suppression. Test all
+and time encoding and conflict behavior, the quiet window key `display`, quiet-hour
+suppression, and whether preset names in records (`rule_name`) are base64 like map names. Test all
 writes with the owner's own robot and account before relying on them.
