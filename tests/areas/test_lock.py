@@ -4,6 +4,7 @@ Every record here is canned. The owner has no lock, so none of this has met real
 
 import hashlib
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ from tolpo import policy
 from tolpo.api import create_app
 from tolpo.areas import lock
 from tolpo.config import Config
-from tolpo.registry import Registry
+from tolpo.registry import Forbidden, Registry
 
 from .. import fakes
 from .fakes import FakeCaller
@@ -26,7 +27,7 @@ SECRET_IP = "192.0.2.77"
 
 
 def record(**overrides):
-    """A lock's TDP `result`, shaped after the field names in the audit (row L1)."""
+    """UNVERIFIED: guessed flat TDP layout, type and owner hash. The audit only names the lock fields."""
     base = {
         "device_id": SECRET_ID,
         "device_id_md5": "0123456789ABCDEF0123456789ABCDEF",
@@ -52,6 +53,7 @@ def record(**overrides):
 
 
 def datagram(result=None, *, error_code=0, header=b"\x02\x00\x00\x01" + b"\x00" * 12):
+    # UNVERIFIED: assumed 16-byte header and plain JSON. This is not a captured reply.
     return header + json.dumps({"error_code": error_code, "result": result if result is not None else record()}).encode()
 
 
@@ -119,6 +121,61 @@ def test_values_of_the_wrong_type_or_range_are_not_trusted():
     assert state.lock is None and state.lock_code is None
     assert state.battery is None and state.backup_battery is None and state.low_battery is None
     assert state.door_code is None and state.last_change is None
+
+
+@pytest.mark.parametrize("value", [1.5, 1.0, float("nan"), float("inf"), -float("inf"), 2**1000, [], {}, "1", True])
+def test_numeric_fields_require_bounded_integers(value):
+    state = lock.parse_lock_record(record(**{name: value for name in lock.LOCK_FIELDS}))
+    assert all(getattr(state, name) is None for name in (
+        "lock_code", "last_lock_code", "last_change", "door_code", "battery", "battery_code",
+        "backup_battery", "backup_battery_code", "power_code",
+    ))
+
+
+@pytest.mark.parametrize("value", [False, 0.0, "0", None, [], {}])
+def test_error_code_requires_an_explicit_integer_zero(value):
+    assert lock.parse_tdp_reply(datagram(error_code=value)) is None
+    assert lock.parse_discovery_json({"error_code": value, "result": record()}) is None
+    assert lock.parse_discovery_json({"result": record()}) is None
+
+
+@pytest.mark.parametrize("value", ["\ud800", "x" * (lock.MAX_ID_LEN + 1), [], {}, True, 1])
+def test_invalid_identifiers_are_ignored(value):
+    assert lock.parse_tdp_reply(datagram(record(device_id=value, device_id_md5=None))) is None
+
+
+@pytest.mark.parametrize("value", ["x" * 5000, "\ud800", [], {}, 1, "f" * 31])
+def test_owner_storage_is_bounded(value):
+    assert lock.parse_lock_record(record(owner=value)).owner is None
+
+
+@pytest.mark.parametrize("payload", [
+    b"[" * 1500 + b"0" + b"]" * 1500,
+    b'{"extra":' + b"[" * (lock.MAX_JSON_DEPTH + 1) + b"0" + b"]" * (lock.MAX_JSON_DEPTH + 1) + b"}",
+    b'{"error_code":0,"result":null}',
+    b"null", b"true", b"[]", b'"text"',
+    b'{"error_code":0,"result":42}',
+    b'{"error_code":0,"result":{"device_id":"fake","lock_status":NaN}}',
+    b'{"error_code":0,"result":{"device_id":"fake","lock_status":Infinity}}',
+])
+def test_hostile_datagrams_are_ignored_without_raising(payload):
+    book = lock.LockBook(Clock())
+    lock.TDPLockListener(book).datagram_received(b"\0" * lock.HEADER_LEN + payload, (SECRET_IP, 20002))
+    assert book.current() == []
+
+
+def test_depth_limit_is_checked_before_json_decoding(monkeypatch):
+    def must_not_decode(*args, **kwargs):
+        pytest.fail("excessive depth reached the JSON decoder")
+
+    monkeypatch.setattr(lock.json, "loads", must_not_decode)
+    payload = b"[" * (lock.MAX_JSON_DEPTH + 1) + b"0" + b"]" * (lock.MAX_JSON_DEPTH + 1)
+    assert lock.parse_tdp_reply(b"\0" * lock.HEADER_LEN + payload) is None
+
+
+def test_depth_scan_ignores_brackets_and_escaped_quotes_in_strings():
+    payload = datagram(record(extra='[' * 40 + '\\"' + ']' * 40))
+    assert lock.parse_tdp_reply(payload) == lock.parse_lock_record(record())
 
 
 def test_a_record_is_a_lock_by_type_or_by_lock_status():
@@ -221,7 +278,6 @@ def test_the_answer_is_compact_and_marks_its_guesses(make_house):
     out = lock.lock_states(reg)
     assert out["locks"] == [
         {
-            "id": lock.parse_lock_record(record()).key,
             "model": "DL110(EU)",
             "lock": "locked",
             "door_code": 2,
@@ -240,8 +296,25 @@ def test_the_answer_is_compact_and_marks_its_guesses(make_house):
 def test_the_answer_never_carries_ids_addresses_or_the_owner_hash(make_house):
     reg, _, _ = house_with(make_house, record())
     text = json.dumps(lock.lock_states(reg)).lower()
-    for secret in (SECRET_ID, SECRET_MAC, SECRET_IP, MINE, "0123456789abcdef", "owner", "http_port"):
+    for secret in (SECRET_ID, SECRET_MAC, SECRET_IP, MINE, "0123456789abcdef", '"id"', "owner", "http_port", "lock-"):
         assert secret.lower() not in text, secret
+
+
+@pytest.mark.parametrize("value", [SECRET_ID, SECRET_MAC, SECRET_IP, MINE, "20002", "DL110 " + SECRET_IP, "DL110(" + MINE + ")"])
+def test_model_text_cannot_smuggle_private_values(make_house, value):
+    reg, _, _ = house_with(make_house, record(device_model=value))
+    out = lock.lock_states(reg)
+    assert out["locks"][0]["model"] == "door lock"
+    assert value not in json.dumps(out)
+
+
+def test_account_missing_or_mismatched_never_describes_a_lock(make_house):
+    reg, _, book = house_with(make_house, record())
+    for email in ("", "another-fake-account"):
+        reg.cfg = replace(reg.cfg, email=email)
+        out = lock.lock_states(reg, book)
+        assert out["locks"] == [] and out["other_locks"] == 1
+        assert "door_code" not in json.dumps(out)
 
 
 def test_locks_of_other_accounts_are_counted_not_described(make_house):
@@ -258,7 +331,7 @@ def test_locks_of_other_accounts_are_counted_not_described(make_house):
 
 def test_nothing_heard_says_so(make_house):
     reg, _, _ = make_house()
-    assert lock.lock_states(reg) == {"locks": [], "note": "No door lock on this account has been heard on the network."}
+    assert lock.lock_states(reg) == {"locks": [], "note": lock.NO_LOCK_NOTE}
 
 
 def test_the_app_switch_is_shown_only_when_the_record_carries_it(make_house):
@@ -275,10 +348,26 @@ def test_the_app_switch_is_shown_only_when_the_record_carries_it(make_house):
     ["setLockStatus", "setSwitchAppKey", "addCodeData", "addUserData", "setAutoLockInfo", "setErrorProtection",
      "setWifiSoftSwitch", "deviceReset", "getCodeList", "multipleRequest"],
 )
-def test_no_lock_method_is_declared_so_the_caller_refuses_all(method, make_house):
-    make_house()  # the caller loads every area's declarations
+@pytest.mark.anyio
+async def test_no_native_lock_method_is_declared_so_the_caller_refuses_it(method, make_house):
+    _, caller, _ = make_house(tier=4, allow_methods=[method])
     assert lock.METHODS == []
     assert policy.rule_for("lock", method) is None
+    entry = SimpleNamespace(kind="lock", slug="fake-lock")
+    with pytest.raises(Forbidden):
+        await caller.call(entry, method, confirm=f"{method} fake-lock")
+    with pytest.raises(Forbidden):
+        await caller.call_many(entry, {"get_device_info": None, method: {}}, confirm=f"{method} fake-lock")
+    assert caller.sent == []
+
+
+@pytest.mark.xfail(strict=True, reason="common.py declares set_device_info for locks; requires a shared-file fix")
+def test_shared_catalog_must_refuse_lock_writes(make_house):
+    # Review finding: common.py includes locks in SMART_KINDS. The lock area cannot edit that shared file.
+    _, caller, _ = make_house(tier=2)
+    entry = SimpleNamespace(kind="lock", slug="fake-lock")
+    with pytest.raises(Forbidden):
+        caller.check(entry, "set_device_info")
 
 
 @pytest.mark.anyio

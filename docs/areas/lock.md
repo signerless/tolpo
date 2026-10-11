@@ -8,15 +8,20 @@ after the field names in the app audit. Treat the whole area as untested on hard
 
 ## What it does today
 
-A lock announces itself on the local network when tolpo looks for devices (TDP discovery, UDP port 20002). The reply
-carries the lock status, the door sensor state and the battery. tolpo reads that reply, keeps the latest state of
-each lock in memory, and shows it to the agent. It sends nothing to the lock and cannot lock or unlock.
+The audit names lock status, door sensor and battery fields in TDP discovery (UDP port 20002). The parser accepts
+an assumed reply layout and keeps the latest state in memory. Neither discovery feed is connected automatically.
+Normal use therefore returns an empty cache. This area sends nothing to the lock and cannot lock or unlock.
 
-- `lock_state`: shows each door lock on this account as it last announced itself: locked or unlocked, the door sensor code, battery, low battery, and how many seconds ago it was heard. Says plainly when no lock was heard.
+- `lock_state`: shows cached lock records matching an UNVERIFIED account hash assumption. Returns guessed locked/unlocked words, raw door codes, battery and record age. Says when no lock was heard. Discovery feeds are not connected automatically.
 
 The same answer is at `GET /locks` on the HTTP API, behind the usual token.
 
 ### What the answer means
+
+UNVERIFIED: the parser assumes a 16-byte binary header followed by plain UTF-8 JSON, with an integer
+`error_code` of zero and lock fields flat in `result` next to `device_model`. This follows other TDP families,
+not a captured lock reply. The record's `device_type` was never seen. `SMART.DOORLOCK` comes from app analytics;
+the parser also recognizes records carrying `lock_status`. No lock fixture is available.
 
 - `lock`: `locked` or `unlocked`. UNVERIFIED. The audit records the lock command's values as 0 and 1, with 1
   presumably meaning locked. That the discovery record uses the same values is a further guess. Other values show as
@@ -25,7 +30,7 @@ The same answer is at `GET /locks` on the HTTP API, behind the usual token.
   meanings are not documented in what we read, so tolpo passes the number on instead of guessing a word.
 - `last_change`: the lock's `last_onoff_time`. UNVERIFIED. Probably a Unix time of the last lock change.
 - `battery`, `backup_battery`: percent. `low_battery`: true or false.
-- `app_unlock`: shown only if the record carries `switch_appkey`. The audit does not list it in the discovery record,
+- `app_unlock`: UNVERIFIED presence. Shown only if the record carries `switch_appkey`. The audit does not list it in the discovery record,
   so normally it is missing and the answer says that reading the app lock and unlock switch needs the lock client.
 - `heard_s_ago`: seconds since the record arrived. Records older than one hour are dropped.
 
@@ -34,14 +39,21 @@ The same answer is at `GET /locks` on the HTTP API, behind the usual token.
 - Only locks whose discovery record names this account as owner are described. The owner hash is MD5 of the account
   email, as python-kasa computes it for other devices. UNVERIFIED for locks. Other locks are only counted
   (`other_locks`), because a neighbour's lock on a shared network would tell when their door is open. If your own lock
-  shows up only in that count, the hash rule is wrong for locks and needs a fix.
-- The answer never carries the device id, MAC, IP address, port or owner hash. Each lock gets a short id made by
-  hashing its device id.
-- The model text is flattened and shortened before an agent sees it. Values of the wrong type or out of range are
-  dropped, not trusted.
-- At most 32 locks are remembered and datagrams over 4 KB are ignored, so spoofed packets cannot grow memory.
-- The area declares no device methods. The caller therefore refuses every lock method, from lock and unlock to codes
-  and settings.
+  shows up only in that count, the hash rule or the record may be wrong. This is a provisional filter, not proof
+  of account ownership. The parser does not authenticate records; a forged record can claim the same hash.
+- The answer never carries an identifier, MAC, IP address, port or owner hash. Full device-id digests are kept only
+  for internal deduplication.
+- Model text must match one of the audit's model names (optionally with EU, US or UK in parentheses), then goes
+  through `views.clean`. Other text becomes `door lock`. This prevents identifiers hidden in model text from leaking.
+- Numeric fields require integers, excluding booleans. Percentages must be 0 to 100. Codes must fit a signed
+  32-bit integer; timestamps must be nonnegative signed 64-bit integers. These are defensive bounds, not verified
+  protocol ranges. Boolean fields also accept integer 0 and 1. Invalid fields are dropped.
+- At most 32 locks are remembered. Datagrams over 4 KB and JSON deeper than 16 containers are ignored before
+  decoding. Non-finite JSON numbers are rejected. Stored identifiers and owner hashes have fixed length bounds.
+- The area declares no device methods. Native lock methods such as `setLockStatus`, including batched calls,
+  are refused even with a method allowance and confirmation. A shared-catalog exception remains: `common.py`
+  declares SMART reads and level 2 `set_device_info` for `lock`. That does not match the audited lock protocol.
+  Removing `lock` from those shared declarations is required before claiming all lock methods are refused.
 
 ### Where the records come from
 
@@ -49,8 +61,9 @@ The parser is a pure function. Two ways to feed it exist, and neither is switche
 
 1. python-kasa's own discovery. Its `on_discovered_raw` callback hands over every TDP reply before python-kasa gives
    up on the unknown lock type. `LockBook.note_raw` takes exactly that shape. `LockBook.note_unsupported` takes the
-   error python-kasa raises for an unknown type. This is the reliable path, because TDP replies go back to the port
-   that sent the probe. Wiring it needs a small change in `registry.py` (see the end of this page).
+   error python-kasa raises for an unknown type. This is a proposed path; the callback shapes match python-kasa,
+   but no lock has been checked. TDP replies normally go back to the probing port. Wiring needs a change in
+   `registry.py` (see the end of this page).
 2. A passive listener on UDP 20002 (`TDPLockListener`, started with `listen`). UNVERIFIED usefulness: it only hears
    a lock if the lock sends its record without being asked. It is not started anywhere.
 
@@ -101,6 +114,8 @@ audit's opt-in tiers:
 - Level 4: calibration, reset and reboot, firmware install, onboarding and cloud binding.
 - Never exposed: the debug server override, which can point the lock at another server.
 
+Every level 3 or 4 call needs the confirmation phrase, including access creation and changes to protections.
+
 Order of work once a client exists: device info and running info, battery and event log reads, then settings, then
 lock and unlock, then credentials.
 
@@ -113,7 +128,8 @@ lock and unlock, then credentials.
 5. What do the codes in the record mean: `lock_status` beyond 0 and 1 (jammed, not calibrated), `door_state`,
    `battery_status`, `backup_battery_status`, `power_source`? Is `last_onoff_time` a Unix time?
 6. Does the lock's `owner` field use the same hash as other Tapo devices (MD5 of the account email)?
-7. What is the lock's `device_type` in the record? The app uses `SMART.DOORLOCK` in analytics only.
+7. What is the lock's `device_type` in the record? The app uses `SMART.DOORLOCK` in analytics only. Are fields flat
+   in `result`, and is there a 16-byte header followed by plain JSON?
 8. What is the default of the app lock and unlock switch on a new lock, and does its confirmation switch apply to
    local calls?
 9. The REST path or MQTT topic of the cloud passthrough call, and how it authenticates.
@@ -127,10 +143,15 @@ When a lock is available, look at:
   `device_model`, and whether the reply is plain or encrypted.
 - `lock_state` before and after locking by hand: does `lock` flip between `locked` and `unlocked` the right way round?
 - Open and close the door: which `door_code` values appear?
-- Whether the lock shows under `locks` or only under `other_locks`. The second means the owner hash rule is wrong.
+- Whether the lock shows under `locks` or only under `other_locks`. The second may mean the owner hash rule or the
+  record layout is wrong.
 
 ## Wiring that needs a shared file
 
 To feed `lock_state` from tolpo's own discovery, `registry.py` would pass python-kasa an `on_discovered_raw`
 callback that calls `lock.book_for(registry).note_raw(event)`, and call `note_unsupported(exc)` from its existing
-`on_unsupported` handler. Nothing else changes. This page does not edit `registry.py`.
+`on_unsupported` handler. This page does not edit `registry.py`.
+
+`areas/common.py` also needs to remove `lock` from `SMART_KINDS`. It currently permits `set_device_info` at level 2
+without confirmation and declares SMART reads that the lock audit does not support. This area does not edit that
+shared file.
