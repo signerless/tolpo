@@ -26,7 +26,9 @@ Only the owner of the PyPI account can do this.
    | Workflow name | `release.yml` |
    | Environment name | `pypi` |
 
-A pending publisher reserves the name and turns into a normal trusted publisher on the first release.
+A pending publisher does not reserve the name. The project is created by the first release, and if someone
+else registers `tolpo` before that, the pending publisher stops working. Publish the first release soon
+after you set it up. After it, the pending publisher becomes a normal trusted publisher.
 
 The `pypi` environment already exists in this repository and requires an owner to approve each deployment, so
 a tag pushed by mistake cannot publish by itself.
