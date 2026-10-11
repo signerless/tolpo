@@ -8,7 +8,7 @@ import stat
 import tomllib
 from urllib.parse import urlsplit
 
-from .models import NetworkError
+from .models import NetworkError, ip, mac
 
 
 def private_open(path: Path, flags: int = os.O_RDONLY):
@@ -97,6 +97,12 @@ def load(path: Path | None = None) -> Settings:
             data[key] = tuple(data.get(key, ()))
             if not all(isinstance(v, str) for v in data[key]):
                 raise ValueError
+        for value in data["protected"]:
+            # One literal IP or MAC per entry. A range here would be a surprise exception.
+            try:
+                ip(value)
+            except NetworkError:
+                mac(value)
         cfg = Settings(**data)
         if (cfg.mode not in {"observe", "enforce"} or set(cfg.allow_write) - {"block_internet", "allow_only"}
                 or type(cfg.retention_days) is not int or type(cfg.default_revert_minutes) is not int
@@ -106,7 +112,7 @@ def load(path: Path | None = None) -> Settings:
             if not isinstance(value, str) or (value and not Path(value).expanduser().is_absolute()):
                 raise ValueError
         return cfg
-    except (ValueError, TypeError, KeyError, UnicodeError):
+    except (ValueError, TypeError, KeyError, UnicodeError, NetworkError):
         raise NetworkError("Invalid network configuration; inline credentials are forbidden") from None
 
 

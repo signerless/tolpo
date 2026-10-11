@@ -78,6 +78,7 @@ def test_config_missing_override_and_env_names(tmp_path, monkeypatch):
     '[[providers]]\nname="x"\nkind="pihole"\nhost=5\nsecret_env="NETWORK_TEST_SECRET"',
     '[[providers]]\nname="x"\nkind="pihole"\nhost="https://dns.example.test"\nsecret_env="NETWORK_TEST_SECRET"\nca_file="relative.pem"',
     '[[providers]]\nname="x"\nkind="linux"\nca_file="/absolute/ca.pem"',
+    'protected=["192.0.2.0/24"]', 'protected=["router"]',
 ])
 def test_config_refuses_secrets_insecure_transport_and_invalid_inputs(tmp_path, contents):
     with pytest.raises(NetworkError) as error:
