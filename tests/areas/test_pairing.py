@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,18 +58,20 @@ def house(make_house, monkeypatch):
 
 @pytest.fixture
 def env(monkeypatch):
-    values = {"TEST_AP": "Tapo_Setup_TEST", "TEST_SSID": "PRIVATE-NETWORK", "TEST_WIFI_PASSWORD": "PRIVATE-WIFI-PASS", "TEST_ACCOUNT": "PRIVATE-ACCOUNT", "TEST_ACCOUNT_PASSWORD": "PRIVATE-ACCOUNT-PASS"}
+    values = {"TOLPO_PROVISION_AP": "Tapo_Setup_TEST", "TOLPO_PROVISION_SSID": "PRIVATE-NETWORK", "TOLPO_PROVISION_WIFI_PASSWORD": "PRIVATE-WIFI-PASS", "TOLPO_PROVISION_ACCOUNT": "PRIVATE-ACCOUNT", "TOLPO_PROVISION_ACCOUNT_PASSWORD": "PRIVATE-ACCOUNT-PASS"}
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     return values
 
 
 def plan(**kwargs):
-    return p.SoftAPPlan("new-plug", "expected-id", "192.0.2.1", "TEST_AP", "TEST_SSID", "TEST_WIFI_PASSWORD", "TEST_ACCOUNT", "TEST_ACCOUNT_PASSWORD", "wlan0", **kwargs)
+    return p.SoftAPPlan("new-plug", "expected-id", "192.0.2.1", "TOLPO_PROVISION_AP", "TOLPO_PROVISION_SSID", "TOLPO_PROVISION_WIFI_PASSWORD", "TOLPO_PROVISION_ACCOUNT", "TOLPO_PROVISION_ACCOUNT_PASSWORD", "wlan0", **kwargs)
 
 
 def expected_phrase(operation, entry):
-    return policy.confirmation(policy.rule_for(entry.kind, operation), entry.slug)
+    # pair_remove names the child that is removed, not the hub.
+    subject = "main-door" if operation == "pair_remove" else entry.slug
+    return policy.confirmation(policy.rule_for(entry.kind, operation), subject)
 
 
 async def action(reg, adapter, operation, confirm=None, **changes):
@@ -79,7 +83,7 @@ async def action(reg, adapter, operation, confirm=None, **changes):
     if operation == "pair_name":
         return await p.pair_name(reg, adapter, entry, changes.pop("name", "Paired Plug"), confirm)
     if operation == "wifi_join":
-        return await p.wifi_join(reg, adapter, entry, "TEST_SSID", "TEST_WIFI_PASSWORD", "TEST_ACCOUNT", "TEST_ACCOUNT_PASSWORD", confirm=confirm, **changes)
+        return await p.wifi_join(reg, adapter, entry, "TOLPO_PROVISION_SSID", "TOLPO_PROVISION_WIFI_PASSWORD", "TOLPO_PROVISION_ACCOUNT", "TOLPO_PROVISION_ACCOUNT_PASSWORD", confirm=confirm, **changes)
     if operation == "reset_factory":
         return await p.reset(reg, adapter, entry, factory=True, confirm=confirm, **changes)
     if operation == "reset_reboot":
@@ -103,12 +107,12 @@ async def test_levels_stop_before_adapter_or_refresh(house, operation):
 
 
 @pytest.mark.parametrize("operation", LIFECYCLE)
-@pytest.mark.parametrize("confirmation", [None, "wrong action", "{operation} another-device"])
+@pytest.mark.parametrize("confirmation", [None, "wrong action", "{operation} office-1", "{operation} tapo-h200 main-door"])
 async def test_every_lifecycle_call_requires_its_exact_phrase(house, operation, confirmation):
     reg, _, _ = house(tier=4)
     adapter = FakeLifecycle()
     with pytest.raises(NeedsConfirmation):
-        await action(reg, adapter, operation, confirm=confirmation)
+        await action(reg, adapter, operation, confirm=confirmation and confirmation.format(operation=operation))
     assert adapter.sent == []
     reg.discover.assert_not_awaited()
 
@@ -184,7 +188,7 @@ async def test_explicit_operation_opt_in_and_read_at_level_zero(house, env):
 async def test_env_values_only_after_policy_and_never_in_errors(house, monkeypatch):
     reg, _, _ = house(tier=4)
     adapter = FakeLifecycle()
-    for name in ["TEST_SSID", "TEST_WIFI_PASSWORD", "TEST_ACCOUNT", "TEST_ACCOUNT_PASSWORD"]:
+    for name in ["TOLPO_PROVISION_SSID", "TOLPO_PROVISION_WIFI_PASSWORD", "TOLPO_PROVISION_ACCOUNT", "TOLPO_PROVISION_ACCOUNT_PASSWORD"]:
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(NeedsConfirmation):
         await action(reg, adapter, "wifi_join")
@@ -199,7 +203,7 @@ async def test_env_values_only_after_policy_and_never_in_errors(house, monkeypat
 
 async def test_wifi_network_length_before_write(house, env, monkeypatch):
     reg, _, _ = house(tier=4)
-    monkeypatch.setenv("TEST_SSID", "x" * 33)
+    monkeypatch.setenv("TOLPO_PROVISION_SSID", "x" * 33)
     adapter = FakeLifecycle()
     with pytest.raises(RegistryError, match="32 bytes"):
         await action(reg, adapter, "wifi_join", "wifi_join desk-lamp")
@@ -297,7 +301,7 @@ def setup_device():
     return dev
 
 
-@pytest.mark.parametrize("tier,confirm,error", [(1, "pair_softap new-plug", Forbidden), (4, None, NeedsConfirmation), (4, "pair_softap wrong-plug", NeedsConfirmation)])
+@pytest.mark.parametrize("tier,confirm,error", [(1, "pair_softap expected-id", Forbidden), (4, None, NeedsConfirmation), (4, "pair_softap wrong-plug", NeedsConfirmation)])
 async def test_softap_gate_before_host_or_credentials(house, monkeypatch, tier, confirm, error):
     reg, _, _ = house(tier=tier)
     host = FakeHost()
@@ -311,9 +315,9 @@ async def test_softap_gate_before_host_or_credentials(house, monkeypatch, tier, 
 
 async def test_softap_plan_has_steps_without_contacts_or_private_values(house):
     reg, _, _ = house(tier=4)
-    out = p.softap_plan(reg, plan(), "pair_softap new-plug")
+    out = p.softap_plan(reg, plan(), "pair_softap expected-id")
     assert out["target"] == "new-plug" and len(out["steps"]) == 6
-    assert "192.0.2.1" not in json.dumps(out) and "TEST_" not in json.dumps(out)
+    assert "192.0.2.1" not in json.dumps(out) and "TOLPO_PROVISION_" not in json.dumps(out)
     reg.discover.assert_not_awaited()
 
 
@@ -322,7 +326,7 @@ async def test_softap_input_validation_before_host(house, env, changes):
     reg, _, _ = house(tier=4)
     host = FakeHost()
     with pytest.raises(RegistryError):
-        await p.softap_provision(reg, FakeLifecycle(), replace(plan(), **changes), host, confirm="pair_softap new-plug")
+        await p.softap_provision(reg, FakeLifecycle(), replace(plan(), **changes), host, confirm="pair_softap expected-id")
     assert not host.events
 
 
@@ -338,15 +342,15 @@ async def test_softap_end_to_end_restores_then_rescans_and_verifies(house, env, 
         reg._adopt(new)
 
     monkeypatch.setattr(reg, "discover", AsyncMock(side_effect=discover))
-    out = await p.softap_provision(reg, adapter, plan(), host, connector, "pair_softap new-plug")
+    out = await p.softap_provision(reg, adapter, plan(), host, connector, "pair_softap expected-id")
     assert host.events == ["current", "join", "restore"]
-    connector.connect.assert_awaited_once_with("192.0.2.1", env["TEST_ACCOUNT"], env["TEST_ACCOUNT_PASSWORD"])
+    connector.connect.assert_awaited_once_with("192.0.2.1", env["TOLPO_PROVISION_ACCOUNT"], env["TOLPO_PROVISION_ACCOUNT_PASSWORD"])
     dev.disconnect.assert_awaited_once()
     assert out["verified"] == "lan" and out["cloud_connected"] is True
     assert out["device"]["name"] == "New Plug" and out["new_devices"] == [out["device"]]
     assert not any(secret in json.dumps(out) for secret in [*env.values(), "previous-private-network"])
     assert adapter.sent[0][1] == "wifi_join"
-    assert adapter.sent[0][2]["password"] == env["TEST_WIFI_PASSWORD"]
+    assert adapter.sent[0][2]["password"] == env["TOLPO_PROVISION_WIFI_PASSWORD"]
 
 
 @pytest.mark.parametrize("where", ["join", "connect", "id", "camera", "send", "refresh", "disconnect", "cancel"])
@@ -371,7 +375,7 @@ async def test_softap_restores_after_every_failure(house, env, monkeypatch, wher
         monkeypatch.setattr(reg, "refresh", AsyncMock(side_effect=failure))
     expected = asyncio.CancelledError if where == "cancel" else (RegistryError, ValueError)
     with pytest.raises(expected) as exc:
-        await p.softap_provision(reg, adapter, plan(), host, connector, "pair_softap new-plug")
+        await p.softap_provision(reg, adapter, plan(), host, connector, "pair_softap expected-id")
     assert host.events[-1] == "restore"
     assert "PRIVATE" not in str(exc.value)
     if where not in {"connect", "join"}:
@@ -383,12 +387,12 @@ async def test_softap_reports_restore_failure_and_lan_timeout(house, env, monkey
     reg, _, _ = house(tier=4)
     connector = SimpleNamespace(connect=AsyncMock(return_value=setup_device()))
     with pytest.raises(RegistryError, match="Host Wi-Fi restore failed"):
-        await p.softap_provision(reg, FakeLifecycle(), plan(), FakeHost(restore_failure=True), connector, "pair_softap new-plug")
+        await p.softap_provision(reg, FakeLifecycle(), plan(), FakeHost(restore_failure=True), connector, "pair_softap expected-id")
     reg.discover.assert_not_awaited()
     monkeypatch.setattr(reg, "discover", AsyncMock(side_effect=TimeoutError()))
     host = FakeHost()
     with pytest.raises(DeviceUnavailable, match="LAN verification timed out"):
-        await p.softap_provision(reg, FakeLifecycle(), plan(wait_seconds=1), host, connector, "pair_softap new-plug")
+        await p.softap_provision(reg, FakeLifecycle(), plan(wait_seconds=1), host, connector, "pair_softap expected-id")
     assert host.events[-1] == "restore"
 
 
@@ -459,7 +463,7 @@ async def test_softap_refuses_robot_family_before_write(house, env):
     adapter, host = FakeLifecycle(), FakeHost()
     reg.discover.side_effect = TimeoutError()
     with pytest.raises(RegistryError, match="device family"):
-        await p.softap_provision(reg, adapter, plan(), host, SimpleNamespace(connect=AsyncMock(return_value=dev)), "pair_softap new-plug")
+        await p.softap_provision(reg, adapter, plan(), host, SimpleNamespace(connect=AsyncMock(return_value=dev)), "pair_softap expected-id")
     assert not adapter.sent and host.events[-1] == "restore"
 
 
@@ -480,9 +484,18 @@ async def test_real_host_adapters_argv_and_restoration(host_type):
     saved = await host.current()
     await host.join("Tapo_Setup_TEST")
     await host.restore(saved)
-    assert calls[1][-1] == "Tapo_Setup_TEST" if host_type is p.MacOSWifi else calls[1][4] == "Tapo_Setup_TEST"
-    assert previous in calls[2]
-    assert len(calls) == 4
+    if host_type is p.MacOSWifi:
+        assert calls[1] == ("/usr/sbin/networksetup", "-setairportnetwork", "wlan0", "Tapo_Setup_TEST")
+        assert calls[2] == ("/usr/sbin/networksetup", "-setairportnetwork", "wlan0", previous)
+        # The open setup network is not left in the host's auto-join list.
+        assert calls[4] == ("/usr/sbin/networksetup", "-removepreferredwirelessnetwork", "wlan0", "Tapo_Setup_TEST")
+        assert len(calls) == 5
+    else:
+        assert calls[2] == ("nmcli", "connection", "add", "type", "wifi", "ifname", "wlan0", "con-name", "tolpo-softap", "autoconnect", "no", "ssid", "Tapo_Setup_TEST")
+        assert calls[3] == ("nmcli", "connection", "up", "id", "tolpo-softap", "ifname", "wlan0")
+        assert calls[4] == ("nmcli", "connection", "up", "uuid", previous, "ifname", "wlan0")
+        assert calls[-1] == ("nmcli", "connection", "delete", "id", "tolpo-softap")
+        assert len(calls) == 7
 
 
 @pytest.mark.parametrize("host_type", [p.MacOSWifi, p.LinuxWifi])
@@ -532,7 +545,8 @@ async def test_real_kasa_pair_flow_shapes_with_fake_module_wire(camera_hub, dete
     dev = SimpleNamespace(host="192.0.2.20", _children={"new-child": object()} if detected else {}, update=AsyncMock())
     category = [{"category": "subg.trigger"}]
     if camera_hub:
-        dev._last_update = {"getSupportChildDeviceCategory": {"childControl": {"device_category_list": category}}}
+        # The owner's H200 answers without a childControl wrapper (fixtures/hub/H200).
+        dev._last_update = {"getSupportChildDeviceCategory": {"device_category_list": category}}
         setup = CameraSetup(dev, "childQuickSetup")
     else:
         dev._last_update = {"get_support_child_device_category": {"device_category_list": category}}
@@ -686,14 +700,14 @@ async def test_mcp_all_tools_have_docs_types_levels_and_execute(house, env, mcp,
     monkeypatch.setattr(reg, "discover", AsyncMock(side_effect=discover))
     args = {
         "pair_hub": {"device": "tapo-h200", "timeout": 1, "confirm": "pair_hub tapo-h200"},
-        "pair_remove": {"device": "tapo-h200", "child": "main-door", "confirm": "pair_remove tapo-h200"},
+        "pair_remove": {"device": "tapo-h200", "child": "main-door", "confirm": "pair_remove main-door"},
         "pair_name": {"device": "desk-lamp", "name": "Renamed Plug", "confirm": "pair_name desk-lamp"},
         "wifi_scan": {"device": "desk-lamp"},
-        "wifi_join": {"device": "desk-lamp", "ssid_env": "TEST_SSID", "password_env": "TEST_WIFI_PASSWORD", "account_env": "TEST_ACCOUNT", "account_password_env": "TEST_ACCOUNT_PASSWORD", "confirm": "wifi_join desk-lamp"},
+        "wifi_join": {"device": "desk-lamp", "ssid_env": "TOLPO_PROVISION_SSID", "password_env": "TOLPO_PROVISION_WIFI_PASSWORD", "account_env": "TOLPO_PROVISION_ACCOUNT", "account_password_env": "TOLPO_PROVISION_ACCOUNT_PASSWORD", "confirm": "wifi_join desk-lamp"},
         "reset_factory": {"device": "desk-lamp", "confirm": "reset_factory desk-lamp"},
         "reset_reboot": {"device": "desk-lamp"},
-        "pair_softap_plan": {"plan": vars(plan()), "confirm": "pair_softap new-plug"},
-        "pair_softap_provision": {"plan": vars(plan()), "confirm": "pair_softap new-plug"},
+        "pair_softap_plan": {"plan": vars(plan()), "confirm": "pair_softap expected-id"},
+        "pair_softap_provision": {"plan": vars(plan()), "confirm": "pair_softap expected-id"},
     }
     doc = (Path(__file__).parents[2] / "docs/areas/pairing.md").read_text()
     async with mcp(reg, caller) as client:
@@ -717,3 +731,158 @@ async def test_mcp_refusals_and_validation_do_not_call_devices(house, mcp, monke
             result = await client.call_tool(name, args)
             assert result.is_error
     assert not adapter.sent
+
+
+async def test_pair_remove_phrase_names_the_child_and_spares_siblings(house):
+    reg, _, _ = house(tier=4)
+    hub = reg.resolve_one("tapo-h200")
+    adapter = FakeLifecycle()
+    # A phrase for the hub, or for a sibling, never removes this child.
+    for wrong in ("pair_remove tapo-h200", "pair_remove temp-sensor"):
+        with pytest.raises(NeedsConfirmation):
+            await p.pair_remove(reg, adapter, hub, "main-door", wrong)
+    assert adapter.sent == []
+    out = await p.pair_remove(reg, adapter, hub, "main-door", "pair_remove main-door")
+    assert out["removed"] is True
+    assert adapter.sent == [("tapo-h200", "pair_remove", {"device_id": "child-door"})]
+    sibling = reg.resolve_one("temp-sensor")
+    assert sibling.online and sibling.root is hub and sibling.device in hub.device.children
+
+
+async def test_hub_reset_targets_only_the_hub(house):
+    reg, _, _ = house(tier=4)
+    hub = reg.resolve_one("tapo-h200")
+    children = {e.slug for e in reg.entries() if e.root is hub}
+    adapter = FakeLifecycle()
+    await p.reset(reg, adapter, hub, factory=True, confirm="reset_factory tapo-h200")
+    assert adapter.sent == [("tapo-h200", "reset_factory", {"delay": 1})]
+    assert {e.slug for e in reg.entries() if e.root is hub} == children
+
+
+@pytest.mark.parametrize("ref", ["Desk Lamp", "desk lamp", "desk*", "*", "main door"])
+async def test_lifecycle_targets_need_exact_ids_not_device_text(house, mcp, monkeypatch, ref):
+    reg, caller, _ = house(tier=4)
+    with pytest.raises(NotFound, match="exact device id"):
+        p.exact_entry(reg, ref)
+    assert p.exact_entry(reg, "p1") is p.exact_entry(reg, "desk-lamp")
+    adapter = FakeLifecycle()
+    monkeypatch.setattr(p, "KasaLifecycle", lambda: adapter)
+    async with mcp(reg, caller) as client:
+        for name, args in [
+            ("reset_factory", {"device": ref, "confirm": f"reset_factory {ref}"}),
+            ("reset_factory", {"device": ref, "confirm": "reset_factory desk-lamp"}),
+            ("pair_remove", {"device": "tapo-h200", "child": ref, "confirm": "pair_remove main-door"}),
+            ("pair_name", {"device": ref, "name": "x", "confirm": "pair_name desk-lamp"}),
+        ]:
+            assert (await client.call_tool(name, args)).is_error
+    assert adapter.sent == []
+
+
+@pytest.mark.parametrize("name", ["TAPO_PASSWORD", "AWS_SECRET_ACCESS_KEY", "TOLPO_PROVISION_", "tolpo_provision_x", "TOLPO_PROVISION_A B"])
+async def test_only_owner_provisioning_variables_can_be_read(house, env, monkeypatch, name):
+    reg, _, _ = house(tier=4)
+    monkeypatch.setenv("TAPO_PASSWORD", "PRIVATE-SERVER-PASSWORD")
+    adapter, host = FakeLifecycle(), FakeHost()
+    entry = reg.resolve_one("desk-lamp")
+    for args in [
+        (name, "TOLPO_PROVISION_WIFI_PASSWORD", "TOLPO_PROVISION_ACCOUNT", "TOLPO_PROVISION_ACCOUNT_PASSWORD"),
+        ("TOLPO_PROVISION_SSID", "TOLPO_PROVISION_WIFI_PASSWORD", "TOLPO_PROVISION_ACCOUNT", name),
+    ]:
+        with pytest.raises(RegistryError, match="TOLPO_PROVISION_") as exc:
+            await p.wifi_join(reg, adapter, entry, *args, confirm="wifi_join desk-lamp")
+        assert "PRIVATE" not in str(exc.value)
+    for field in ("ap_env", "ssid_env", "wifi_password_env", "account_env", "account_password_env"):
+        with pytest.raises(RegistryError, match="TOLPO_PROVISION_"):
+            await p.softap_provision(reg, adapter, replace(plan(), **{field: name}), host, confirm="pair_softap expected-id")
+    assert adapter.sent == [] and host.events == []
+
+
+async def test_softap_phrase_names_the_expected_device_not_the_label(house, env):
+    reg, _, _ = house(tier=4)
+    host, connector = FakeHost(), SimpleNamespace(connect=AsyncMock())
+    for wrong in ("pair_softap new-plug", "pair_softap other-id"):
+        with pytest.raises(NeedsConfirmation, match="pair_softap expected-id"):
+            await p.softap_provision(reg, FakeLifecycle(), plan(), host, connector, wrong)
+    assert host.events == []
+    connector.connect.assert_not_awaited()
+
+
+def _broken_module(monkeypatch):
+    module = types.ModuleType("kasa.transports.futuretransport")
+    module.get_default_credentials = lambda value: value
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+
+def _missing_mapping(monkeypatch):
+    from kasa.transports import aestransport
+
+    monkeypatch.delattr(aestransport, "DEFAULT_CREDENTIALS")
+
+
+def _missing_decoder(monkeypatch):
+    from kasa.transports import sslaestransport
+
+    monkeypatch.delattr(sslaestransport, "get_default_credentials")
+
+
+@pytest.mark.parametrize("change", [_broken_module, _missing_mapping, _missing_decoder])
+async def test_owner_only_guard_fails_closed_when_kasa_internals_change(house, env, monkeypatch, change):
+    reg, _, _ = house(tier=4)
+    change(monkeypatch)
+    adapter, host = FakeLifecycle(), FakeHost()
+    connector = SimpleNamespace(connect=AsyncMock())
+    with pytest.raises(p.GuardUnavailable, match="Owner-only sign-in cannot be enforced"):
+        await action(reg, adapter, "reset_factory", "reset_factory desk-lamp")
+    with pytest.raises(p.GuardUnavailable):
+        await action(reg, adapter, "wifi_scan")
+    with pytest.raises(p.GuardUnavailable):
+        await p.softap_provision(reg, adapter, plan(), host, connector, "pair_softap expected-id")
+    with pytest.raises(p.GuardUnavailable):
+        with p.private_logs():
+            pass
+    assert adapter.sent == [] and host.events == []
+    connector.connect.assert_not_awaited()
+
+
+async def test_cached_fallback_guard_fails_closed_when_attributes_move():
+    from kasa.protocols import SmartProtocol
+    from kasa.transports.aestransport import AesTransport
+
+    transport = AesTransport(config=DeviceConfig("192.0.2.20", credentials=Credentials("owner", "owner-password")))
+    del transport._default_credentials
+    with pytest.raises(p.GuardUnavailable):
+        p._guard_cached_credentials(Entry(SimpleNamespace(protocol=SimpleNamespace(_transport=transport)), "renamed-cache"))
+    protocol = SmartProtocol(transport=AesTransport(config=DeviceConfig("192.0.2.20")))
+    del protocol._transport
+    with pytest.raises(p.GuardUnavailable):
+        p._guard_cached_credentials(Entry(SimpleNamespace(protocol=protocol), "moved-transport"))
+
+
+@pytest.mark.parametrize("host_type", [p.MacOSWifi, p.LinuxWifi])
+async def test_host_forgets_setup_network_even_when_restore_fails(host_type):
+    calls = []
+    previous = "Private Previous" if host_type is p.MacOSWifi else "12345678-1234-1234-1234-123456789abc"
+
+    async def run(*args):
+        calls.append(args)
+        if "-getairportnetwork" in args or "GENERAL.CON-UUID" in args:
+            return "not connected"
+        return ""
+
+    host = host_type("wlan0", run)
+    await host.join("Tapo_Setup_TEST")
+    with pytest.raises(RegistryError):
+        await host.restore(previous)
+    assert calls[-1][1] == "-removepreferredwirelessnetwork" or calls[-1][:3] == ("nmcli", "connection", "delete")
+
+    async def forget_fails(*args):
+        if "-removepreferredwirelessnetwork" in args or args[:3] == ("nmcli", "connection", "delete"):
+            raise RegistryError("Host Wi-Fi command failed")
+        if "-getairportnetwork" in args:
+            return f"Current Wi-Fi Network: {previous}"
+        return previous if "GENERAL.CON-UUID" in args else ""
+
+    host = host_type("wlan0", forget_fails)
+    await host.join("Tapo_Setup_TEST")
+    with pytest.raises(RegistryError, match="restored, but"):
+        await host.restore(previous)
