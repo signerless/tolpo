@@ -547,7 +547,7 @@ class Registry:
         feats, kind, allow = entry.device.features, entry.kind, self.cfg.allow_write
         caps = []
         for cap, fid in (("power", "state"), ("brightness", "brightness"), ("color_temp", "color_temperature"), ("color", "hsv")):
-            if fid in feats and policy.can_write(kind, fid, allow):
+            if fid in feats and policy.can_write(kind, fid, allow, self.cfg.tier):
                 caps.append(cap)
         if "current_consumption" in feats:
             caps.append("energy")
@@ -578,7 +578,7 @@ class Registry:
         feat = entry.device.features.get(feature_id)
         if feat is None or feature_id in policy.HIDDEN:
             raise NotFound(f"{entry.slug} has no feature {feature_id!r}")
-        if not policy.can_write(entry.kind, feature_id, self.cfg.allow_write):
+        if not policy.can_write(entry.kind, feature_id, self.cfg.allow_write, self.cfg.tier):
             raise Forbidden(f"{feature_id!r} cannot be changed on {entry.kind} devices: the owner's policy blocks it")
         return feat
 

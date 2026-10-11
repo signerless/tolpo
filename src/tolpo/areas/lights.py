@@ -405,7 +405,7 @@ async def get_features(registry, ref):
         if feature is None:
             continue
         value = compact(registry.feature_value(feature))
-        row = {"writable": policy.can_write(entry.kind, name, registry.cfg.allow_write)}
+        row = {"writable": policy.can_write(entry.kind, name, registry.cfg.allow_write, registry.cfg.tier)}
         if value not in (None, "", [], {}):
             row["value"] = value
         if feature.choices:

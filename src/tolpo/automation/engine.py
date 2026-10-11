@@ -270,7 +270,7 @@ class Engine:
                 {"on": "state", "brightness": "brightness", "color_temp": "color_temperature", "hue": "hsv", "saturation": "hsv"}[key]
                 for key in action.light.model_dump(exclude_none=True)]
             allowed = entry.kind in policy.POWER_KINDS and self.registry.cfg.tier >= 1 and all(
-                fid in entry.device.features and policy.can_write(entry.kind, fid, self.registry.cfg.allow_write)
+                fid in entry.device.features and policy.can_write(entry.kind, fid, self.registry.cfg.allow_write, self.registry.cfg.tier)
                 for fid in fields)
             return {"level": 1, "allowed": allowed}
         return {"level": 0, "allowed": True}

@@ -98,7 +98,7 @@ def detail(reg: Registry, entry: Entry) -> DeviceDetail:
                 category=feat.category.name,
                 value=reg.feature_value(feat),
                 unit=str(feat.unit) if feat.unit else None,
-                writable=policy.can_write(entry.kind, fid, reg.cfg.allow_write),
+                writable=policy.can_write(entry.kind, fid, reg.cfg.allow_write, reg.cfg.tier),
                 min=feat.minimum_value if has_range else None,
                 max=feat.maximum_value if has_range else None,
                 choices=list(feat.choices) if feat.type is Feature.Type.Choice and feat.choices else None,

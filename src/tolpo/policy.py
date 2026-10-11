@@ -20,12 +20,15 @@ POWER_KINDS = frozenset({"light", "plug", "switch"})
 DEFAULT_WRITABLE = frozenset({"state", "brightness", "color_temperature", "hsv", "light_preset"})
 
 
-def can_write(kind: str, feature_id: str, extra: frozenset[str] = frozenset()) -> bool:
-    """`extra` holds plain ids ("pan_left") or kind-qualified ones ("camera.state")."""
+def can_write(kind: str, feature_id: str, extra: frozenset[str] = frozenset(), tier: int = 1) -> bool:
+    """`extra` holds plain ids ("pan_left") or kind-qualified ones ("camera.state"). The owner names those on purpose,
+    so they are allowed at any level. What is writable out of the box (power, brightness, color) is level 1."""
     if feature_id in HIDDEN or feature_id in NEVER_WRITABLE:
         return False
     if feature_id in extra or f"{kind}.{feature_id}" in extra:
         return True
+    if tier < 1:
+        return False
     if feature_id == "state":
         # On cameras and doorbells `state` is the lens/privacy switch, not a power relay.
         return kind in POWER_KINDS
