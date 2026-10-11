@@ -433,16 +433,33 @@ async def remove_schedule(registry, caller, device, rule_id):
     return await write(registry, caller, device, "removeScheduleRules", {"remove_all": False, "rule_list": [{"id": _text_id(rule_id)}]})
 
 
+# The app's quiet window bean serializes the behavior bit field under the key "display". The decompiled source shows
+# it through an unrelated library constant whose value is "display". UNVERIFIED on a device.
+DND_BITS = "display"
+
+
 async def dnd(registry, caller, device):
     entry = entry_for(registry, device)
-    return {"id": clean(entry.slug), **project(await read(caller, entry, "getDoNotDisturb", {}), ("s_min", "e_min", "display_notification"), ("do_not_disturb",))}
+    data = await read(caller, entry, "getDoNotDisturb", {})
+    out = {"id": clean(entry.slug), **project(data, ("s_min", "e_min"), ("do_not_disturb",))}
+    if type(bits := data.get(DND_BITS)) is int and 0 <= bits <= 31:
+        out["behavior"] = bits
+    return out
 
 
-async def set_dnd(registry, caller, device, enabled, start_minute, end_minute, behavior):
+async def set_dnd(registry, caller, device, enabled, start_minute, end_minute, behavior=None):
     params = {"do_not_disturb": boolean(enabled, "enabled"), "s_min": integer(start_minute, 0, 1439, "start minute"),
-              "e_min": integer(end_minute, 0, 1439, "end minute"), "display_notification": integer(behavior, 0, 31, "quiet behavior bit field")}
+              "e_min": integer(end_minute, 0, 1439, "end minute")}
     if params["s_min"] == params["e_min"]:
         raise BadRequest("quiet window start and end must differ")
+    if behavior is None:
+        # Keep the behavior the owner chose in the app instead of overwriting it with a default.
+        entry = entry_for(registry, device)
+        current = await read(caller, entry, "getDoNotDisturb", {})
+        if type(bits := current.get(DND_BITS)) is int and 0 <= bits <= 31:
+            params[DND_BITS] = bits
+    else:
+        params[DND_BITS] = integer(behavior, 0, 31, "quiet behavior bit field")
     return await write(registry, caller, device, "setDoNotDisturb", params)
 
 
@@ -618,10 +635,10 @@ def tools(ctx):
 
     @ctx.tool(title="Robot quiet window")
     async def vacuum_do_not_disturb(device: DeviceRef) -> dict[str, Any]:
-        """Read the quiet window and its behavior bit field."""
+        """Read the quiet window and its behavior bit field (1 no resume, 2 voice off, 4 dim LEDs, 8 no auto empty, 16 no auto dry)."""
         return await _invoke(ctx, device, dnd)
 
     @ctx.tool(title="Set robot quiet window", tier=Tier.SETTING)
-    async def vacuum_set_do_not_disturb(device: DeviceRef, enabled: Annotated[bool, Field(strict=True, description="Enable the quiet window")], start_minute: Annotated[int, Field(strict=True, ge=0, le=1439, description="Start minute of device local day")], end_minute: Annotated[int, Field(strict=True, ge=0, le=1439, description="End minute, may be next day")], behavior: Annotated[int, Field(strict=True, ge=0, le=31, description="Bit sum: 1 no resume, 2 voice off, 4 dim LEDs, 8 no auto empty, 16 no auto dry")] = 15) -> dict[str, Any]:
+    async def vacuum_set_do_not_disturb(device: DeviceRef, enabled: Annotated[bool, Field(strict=True, description="Enable the quiet window")], start_minute: Annotated[int, Field(strict=True, ge=0, le=1439, description="Start minute of device local day")], end_minute: Annotated[int, Field(strict=True, ge=0, le=1439, description="End minute, may be next day")], behavior: Annotated[int | None, Field(strict=True, ge=0, le=31, description="Bit sum: 1 no resume, 2 voice off, 4 dim LEDs, 8 no auto empty, 16 no auto dry. Omit to keep the current value")] = None) -> dict[str, Any]:
         """Change the quiet window. During it schedules do not start. Overnight windows are allowed."""
         return await _invoke(ctx, device, set_dnd, enabled, start_minute, end_minute, behavior)

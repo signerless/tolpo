@@ -47,7 +47,7 @@ state. A failed refresh is reported as stale state. It does not undo the write.
 - `vacuum_set_schedule`: UNVERIFIED: add or edit a repeating room schedule with a raw weekday value and local start minute. Level 2. Uses vacuum-only defaults.
 - `vacuum_remove_schedule`: Remove one existing schedule id. Level 2. Never removes all schedules.
 - `vacuum_do_not_disturb`: Read quiet hours and the behavior bit field. Level 0.
-- `vacuum_set_do_not_disturb`: Set quiet hours, including overnight windows, and a behavior bit sum. Level 2.
+- `vacuum_set_do_not_disturb`: Set quiet hours, including overnight windows. Level 2. Give a behavior bit sum, or omit it to keep the current one.
 
 Suction and water values are protocol values. App labels can be offset by one.
 Ultra suction resets after a job. Zone corners use the protocol key `vertexs`.
@@ -73,6 +73,9 @@ Quiet hours suppress scheduled starts. Behavior bits are 1 no automatic resume,
 2 voice prompts off, 4 dim LEDs, 8 no automatic emptying and 16 no automatic drying.
 Add the bits to combine them. Start and end use minutes from 0 to 1439 in the
 robot's local day. Equal times are rejected because full-day semantics are unclear.
+The bit field travels under the key `display`. The decompiled app shows that key
+through an unrelated library constant, so it is UNVERIFIED on a device. Tools show
+it as `behavior`.
 
 Map bitmap encoding is not sufficiently described by the audit. The text payload
 and LZ4 length fields do not define its pixel layout or framing. The reader returns

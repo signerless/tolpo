@@ -97,7 +97,7 @@ WRITES = [
     ("vacuum_set_schedule", {"week_day": 3, "minute": 480, "map_id": 7, "room_ids": [1]}, "addScheduleRule", SCHEDULE, 2),
     ("vacuum_set_schedule", {"week_day": 3, "minute": 480, "map_id": 7, "room_ids": [1], "rule_id": "s1"}, "editScheduleRule", {**SCHEDULE, "id": "s1"}, 2),
     ("vacuum_remove_schedule", {"rule_id": "s1"}, "removeScheduleRules", {"remove_all": False, "rule_list": [{"id": "s1"}]}, 2),
-    ("vacuum_set_do_not_disturb", {"enabled": True, "start_minute": 1320, "end_minute": 420, "behavior": 31}, "setDoNotDisturb", {"do_not_disturb": True, "s_min": 1320, "e_min": 420, "display_notification": 31}, 2),
+    ("vacuum_set_do_not_disturb", {"enabled": True, "start_minute": 1320, "end_minute": 420, "behavior": 31}, "setDoNotDisturb", {"do_not_disturb": True, "s_min": 1320, "e_min": 420, "display": 31}, 2),
 ]
 
 READ_TOOLS = [
@@ -329,7 +329,7 @@ async def test_schedule_reads_compact_and_conflict_is_visible(house):
     reg, caller, _ = house(responses={
         "getScheduleRules": {"schedule_rule_max_count": 10, "rule_list": [{**SCHEDULE, "id": "s1\nhello", "token": "HIDDEN"}]},
         "addScheduleRule": {"id": "s2", "conflict_id": "s1", "password": "HIDDEN"},
-        "getDoNotDisturb": {"do_not_disturb": True, "s_min": 1320, "e_min": 420, "display_notification": 31, "token": "HIDDEN"},
+        "getDoNotDisturb": {"do_not_disturb": True, "s_min": 1320, "e_min": 420, "display": 31, "token": "HIDDEN"},
     })
     out = await v.schedules(reg, caller, "floor-robot")
     assert out["rules"][0]["id"] == "s1 hello" and out["rules"][0]["clean_attr"]["room_list"] == [1]
@@ -337,7 +337,7 @@ async def test_schedule_reads_compact_and_conflict_is_visible(house):
     assert saved["id"] == "floor-robot" and saved["rule_id"] == "s2"
     assert saved["conflict_id"] == "s1" and "conflict" in saved["note"]
     assert "changed" not in saved and saved["requested"] == SCHEDULE and "UNVERIFIED" in saved["note"]
-    assert await v.dnd(reg, caller, "floor-robot") == {"id": "floor-robot", "do_not_disturb": True, "s_min": 1320, "e_min": 420, "display_notification": 31}
+    assert await v.dnd(reg, caller, "floor-robot") == {"id": "floor-robot", "do_not_disturb": True, "s_min": 1320, "e_min": 420, "behavior": 31}
     assert "HIDDEN" not in json.dumps([out, saved])
 
 
@@ -463,3 +463,14 @@ async def test_schedule_reply_cannot_redirect_the_robot_id(house):
     assert added["id"] == "floor-robot" and added["rule_id"] == "desk-lamp"
     edited = await v.set_schedule(reg, caller, "floor-robot", 3, 480, 7, [1], True, "s1")
     assert edited["id"] == "floor-robot" and edited["rule_id"] == "other robot"
+
+
+@pytest.mark.anyio
+async def test_quiet_window_keeps_current_behavior_when_omitted(house):
+    reg, caller, _ = house(responses={"getDoNotDisturb": {"do_not_disturb": False, "s_min": 0, "e_min": 60, "display": 6}})
+    out = await v.set_dnd(reg, caller, "floor-robot", True, 1320, 420)
+    assert caller.methods_sent() == ["getDoNotDisturb", "setDoNotDisturb"]
+    assert caller.sent[-1][2] == {"do_not_disturb": True, "s_min": 1320, "e_min": 420, "display": 6} == out["changed"]
+    caller.respond("getDoNotDisturb", {"display": "junk"})
+    await v.set_dnd(reg, caller, "floor-robot", True, 1320, 420)
+    assert caller.sent[-1][2] == {"do_not_disturb": True, "s_min": 1320, "e_min": 420}
