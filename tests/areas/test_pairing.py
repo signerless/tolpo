@@ -139,7 +139,9 @@ async def test_happy_paths_are_compact_and_refresh_writes(house, env, monkeypatc
         assert out["paired"][0]["name"] == "New Sensor"
         assert out["new_devices"] == out["paired"]
     if operation == "pair_remove":
-        assert out["removed"] is True and reg.resolve_one("main-door").online is False
+        assert out["removed"] is True
+        with pytest.raises(NotFound):  # the hub no longer lists it, so the registry forgets it too
+            reg.resolve_one("main-door")
 
 
 @pytest.mark.parametrize("operation", LIFECYCLE + ["reset_reboot", "wifi_scan"])
