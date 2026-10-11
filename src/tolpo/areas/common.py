@@ -14,9 +14,11 @@ CAMERA_KINDS = ["camera", "doorbell"]
 METHODS = [
     policy.method("get_device_info", Tier.READ, SMART_KINDS, "Read the device's basic information."),
     policy.method("get_device_usage", Tier.READ, SMART_KINDS, "Read how long the device has been on and its usage counters."),
-    policy.method("get_component_list", Tier.READ, SMART_KINDS, "Read which features this device model supports."),
+    policy.method("component_nego", Tier.READ, SMART_KINDS, "Read which features this device model supports."),
     policy.method("get_connect_cloud_state", Tier.READ, SMART_KINDS, "Read whether the device is connected to the TP-Link cloud."),
-    policy.method("get_child_device_list", Tier.READ, ["hub"], "List the devices paired to a hub."),
+    policy.method("get_child_device_list", Tier.READ, ["hub"], "List the devices paired to a hub (SMART hubs such as the H100)."),
+    policy.method("getChildDeviceList", Tier.READ, ["hub"], "List the devices paired to a hub (camera-style hubs such as the H200)."),
+    policy.method("getChildDeviceComponentList", Tier.READ, ["hub"], "Read which features the devices paired to a hub support."),
     policy.method("set_device_info", Tier.SETTING, SMART_KINDS, "Change a device setting such as its name or its power-on default."),
     policy.method("getDeviceInfo", Tier.READ, CAMERA_KINDS, "Read the camera's basic information."),
     policy.method("getAppComponentList", Tier.READ, CAMERA_KINDS, "Read which features this camera model supports."),
