@@ -597,3 +597,55 @@ async def test_a_session_id_that_is_not_a_plain_token_never_reaches_our_headers(
     assert (fmt, data) == ("jpeg", jpeg)
     assert not any("x-injected" in headers for headers, _ in camera.received)
     assert camera.stops() == []  # without a session id it can trust, the client only hangs up
+
+
+# ---- a recording played back from the memory card -----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_recording_is_played_back_with_the_request_a_real_camera_answers():
+    """Checked on a C465: client id, scale, start and end; the camera streams on past the end it was given."""
+    async with FakeCamera(PASSWORD, [ts(2, 0x11), ts(1, 0x22)], notices=[{"event_type": "change_aov_type", "value": 1}]) as camera:
+        got = await collect(media.playback_chunks("127.0.0.1", PASSWORD, 1760000000, 1760000002, port=camera.port), 2)
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert got == [ts(2, 0x11), ts(1, 0x22)]  # the notice between the response and the video did not matter
+    (request,) = camera.requests
+    playback = dict(request["params"]["playback"])
+    assert isinstance(playback.pop("client_id"), int)
+    assert playback == {"scale": "1/1", "start_time": "1760000000", "end_time": "1760000002"}
+    assert request["params"]["method"] == "get" and set(request["params"]) == {"playback", "method"}
+    assert (camera.logins, camera.failed_logins) == (1, 0)
+
+
+@pytest.mark.anyio
+async def test_playback_ends_when_the_camera_says_the_recording_finished():
+    async with FakeCamera(PASSWORD, [ts(1, 0x11)], notices=[]) as camera:
+        async def script(cam, request, send):
+            await send("application/json", json.dumps({"type": "response", "seq": 1, "params": {"error_code": 0, "session_id": "4242"}}).encode(), encrypted=False)
+            await send("video/mp2t", ts(1, 0x33), seq=3)
+            await send("application/json", json.dumps({"type": "notification", "params": {"event_type": "stream_status", "status": "finished"}}).encode(), encrypted=False)
+            await send("video/mp2t", ts(1, 0x44), seq=4)  # after the end: never read
+
+        camera.script = script
+        got = []
+        async for chunk in media.playback_chunks("127.0.0.1", PASSWORD, 1760000000, 1760000002, port=camera.port):
+            got.append(chunk)
+    assert got == [ts(1, 0x33)]
+
+
+@pytest.mark.anyio
+async def test_a_wrong_password_for_a_playback_is_reported_after_one_try():
+    async with FakeCamera(PASSWORD, [ts(1)]) as camera:
+        with pytest.raises(snapshot.GrabError) as caught:
+            await collect(media.playback_chunks("127.0.0.1", "not-the-password", 1760000000, 1760000002, port=camera.port), 1)
+    assert caught.value.reason == "auth" and (camera.logins, camera.failed_logins) == (0, 1)
+
+
+@pytest.mark.anyio
+async def test_a_playback_can_be_cut_short_and_lets_the_camera_go():
+    async with FakeCamera(PASSWORD, [ts(1, i) for i in range(1, 30)]) as camera:
+        feed = media.playback_chunks("127.0.0.1", PASSWORD, 1760000000, 1760000002, port=camera.port)
+        first = await feed.__anext__()
+        await feed.aclose()
+        await asyncio.wait_for(camera.disconnected.wait(), 5)
+    assert first == ts(1, 1) and camera.stops() == [{"method": "do", "stop": "null", "session": "4242"}]

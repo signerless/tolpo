@@ -22,6 +22,7 @@ from .. import fakes
 from ..fake_camera import FakeCamera, fake_ts
 
 TAPO_PASSWORD = "b"  # what make_house signs the home in with
+PAST = fake_ts(b"\x00\x00\x00\x01\x65" + b"\x11" * 3000)  # what a camera plays from its memory card: tables, then video
 
 # ---- real shapes (sanitized fixtures of a C225 and a C465) -----------------------------------------------------
 
@@ -36,6 +37,12 @@ CARD = {
     "write_protect": "0",
 }
 LOCKED_CARD = {**CARD, "hardware_security_config": "0", "password": "card-secret-42", "security_status": "2"}  # a C465 reports a password
+
+
+def recording(caller, start=1760000000, length=10):
+    """The camera's index says it holds one recording of `length` seconds from `start`."""
+    caller.respond("searchVideoWithUTC", {"playback": {"search_video_results": [
+        {"search_video_results_1": {"startTime": start, "endTime": start + length, "channel": 0, "video_type": "2"}}], "to_be_continued": 0}})
 
 
 def sd(*cards):
@@ -419,8 +426,9 @@ def to_fake(camera, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_a_recordings_picture_reaches_the_agent_as_an_image(make_house, mcp, monkeypatch, ffmpeg):
-    async with FakeCamera(TAPO_PASSWORD, [], script=picture_script()) as camera:
+async def test_a_picture_of_a_past_moment_is_the_first_frame_of_a_playback_from_there(make_house, mcp, monkeypatch, ffmpeg):
+    """Checked on a C465: the app's cover picture request gets no answer, a playback request does."""
+    async with FakeCamera(TAPO_PASSWORD, [PAST]) as camera:
         to_fake(camera, monkeypatch)
         reg, caller, _ = make_house(snapshots=("hallway-cam",), ffmpeg=ffmpeg.path)
         async with mcp(reg, caller) as client:
@@ -428,8 +436,12 @@ async def test_a_recordings_picture_reaches_the_agent_as_an_image(make_house, mc
     assert not result.is_error, text(result)
     assert images(result) == [fakes.TINY_JPEG] and "16x16" in text(result)
     (request,) = camera.requests
-    assert request["params"] == {"image": {"type": "playback_display", "start_time": "1760000000", "channel": 0}, "method": "get"}
-    assert ffmpeg.calls() == []  # a JPEG needs no decoding
+    playback = request["params"]["playback"]
+    assert request["params"]["method"] == "get" and set(request["params"]) == {"playback", "method"}
+    assert {k: v for k, v in playback.items() if k != "client_id"} == {"scale": "1/1", "start_time": "1760000000", "end_time": "1760000002"}
+    assert isinstance(playback["client_id"], int)
+    (args,) = ffmpeg.calls()
+    assert args[args.index("-f") + 1] == "h264" and ffmpeg.stdin_heads()[0].startswith("0000000165")  # raw video from the stream
     assert caller.sent == []  # nothing went through the control plane
 
 
@@ -449,7 +461,7 @@ async def test_a_coded_picture_is_decoded_by_ffmpeg(make_house, monkeypatch, ffm
     async with FakeCamera(TAPO_PASSWORD, [], script=picture_script("image/avc", frame)) as camera:
         to_fake(camera, monkeypatch)
         reg, _, _ = make_house(snapshots=("hallway-cam",), ffmpeg=ffmpeg.path)
-        picture = await camera_media.thumbnail(reg, reg.resolve_one("hallway-cam"), "2026-10-11 08:00:00", None)
+        picture = await camera_media.thumbnail(reg, reg.resolve_one("hallway-cam"), None, "evt_42")
     assert picture.data == fakes.TINY_JPEG
     (args,) = ffmpeg.calls()
     assert args[args.index("-f") + 1] == "h264" and ffmpeg.stdin_heads()[0].startswith("0000000165")
@@ -502,10 +514,10 @@ async def test_a_rejected_login_is_not_tried_again_for_a_while(make_house, monke
 
 
 def test_the_picture_route_returns_a_jpeg(make_house, monkeypatch, ffmpeg):
-    async def fetch(host, password, request, **kw):
-        return "jpeg", fakes.TINY_JPEG
+    async def playback(host, password, start, end, **kw):
+        yield PAST
 
-    monkeypatch.setattr(media, "fetch_image", fetch)
+    monkeypatch.setattr(media, "playback_chunks", playback)
     client, _ = http(make_house, snapshots=("hallway-cam",), ffmpeg=ffmpeg.path)
     with client:
         ok = client.get("/devices/hallway-cam/thumbnail?start_time=1760000000", headers={"Authorization": "Bearer s3cret"})
@@ -598,18 +610,61 @@ async def test_a_recording_is_copied_to_the_owners_folder_and_only_its_path_is_r
     async with FakeCamera(TAPO_PASSWORD, [], script=recording_script(chunks)) as camera:
         to_fake(camera, monkeypatch)
         reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
         async with mcp(reg, caller) as client:
             first = await client.call_tool("camera_clip_download", {"camera": "hallway-cam", "start_time": "1760000000", "seconds": 30})
             second = await client.call_tool("camera_clip_download", {"camera": "hallway-cam", "start_time": "1760000000", "seconds": 30})
     assert not first.is_error, text(first)
     out = first.structured_content
     stamp = datetime.fromtimestamp(1760000000).strftime("%Y%m%d-%H%M%S")
-    assert Path(out["file"]) == tmp_path / f"hallway-cam-{stamp}-30s.ts" and out["bytes"] == 80 * 188 and out["complete"] is True
+    assert Path(out["file"]) == tmp_path / f"hallway-cam-{stamp}-10s.ts" and out["bytes"] == 80 * 188 and out["complete"] is True
     assert Path(out["file"]).read_bytes() == b"".join(chunks)
-    assert second.structured_content["file"].endswith("-30s-2.ts")  # never overwritten
+    assert second.structured_content["file"].endswith("-10s-2.ts")  # never overwritten
     assert len(json.dumps(out)) < 300  # the video itself never reaches the agent
-    assert camera.requests[0]["params"] == {"download": {"media_type": 0, "start_time": "1760000000", "end_time": "1760000030"}, "method": "get"}
-    assert sorted(p.name for p in tmp_path.iterdir()) == [f"hallway-cam-{stamp}-30s-2.ts", f"hallway-cam-{stamp}-30s.ts"]
+    # Checked on a C465: the recording is asked for from its exact start to its exact end, with a channel and a client id
+    download = dict(camera.requests[0]["params"]["download"])
+    assert isinstance(download.pop("client_id"), int)
+    assert download == {"channels": [0], "media_type": 0, "start_time": "1760000000", "end_time": "1760000010"}
+    assert camera.requests[0]["params"]["method"] == "get"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"hallway-cam-{stamp}-10s-2.ts", f"hallway-cam-{stamp}-10s.ts"]
+
+
+@pytest.mark.anyio
+async def test_a_moment_inside_a_recording_copies_the_whole_recording(make_house, monkeypatch, tmp_path):
+    monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
+    async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"x" * 188])) as camera:
+        to_fake(camera, monkeypatch)
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller, start=1760000000, length=21)
+        out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000008", 30, caller)
+    assert out["file"].endswith("-21s.ts")  # named after the recording, not after the moment asked for
+    download = camera.requests[0]["params"]["download"]
+    assert (download["start_time"], download["end_time"]) == ("1760000000", "1760000021")
+
+
+@pytest.mark.anyio
+async def test_a_moment_outside_every_recording_is_refused_before_the_camera_is_asked_for_video(make_house, monkeypatch, tmp_path):
+    monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
+    async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"x"])) as camera:
+        to_fake(camera, monkeypatch)
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller, start=1760000000, length=21)
+        for moment in ("1760000021", "1759999999", "1760086400"):  # just after the end, just before the start, a day later
+            with pytest.raises(BadRequest, match="no recording at that time"):
+                await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), moment, 30, caller)
+    assert camera.heads == [] and list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.anyio
+async def test_a_recording_longer_than_the_agent_allowed_is_refused_with_its_length(make_house, monkeypatch, tmp_path):
+    monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
+    async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"x"])) as camera:
+        to_fake(camera, monkeypatch)
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller, start=1760000000, length=120)
+        with pytest.raises(BadRequest, match="120 seconds long, longer than the 60 you allowed"):
+            await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 60, caller)
+    assert camera.heads == [] and list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.anyio
@@ -617,6 +672,7 @@ async def test_without_a_folder_nothing_is_downloaded(make_house, mcp, monkeypat
     async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"x"])) as camera:
         to_fake(camera, monkeypatch)
         reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
         async with mcp(reg, caller) as client:
             missing = await client.call_tool("camera_clip_download", {"camera": "hallway-cam", "start_time": "1760000000"})
             monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path / "nope"))
@@ -628,9 +684,10 @@ async def test_without_a_folder_nothing_is_downloaded(make_house, mcp, monkeypat
 @pytest.mark.anyio
 async def test_a_copy_needs_the_picture_opt_in_too(make_house, monkeypatch, tmp_path):
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
-    reg, _, _ = make_house(snapshots=())
+    reg, caller, _ = make_house(snapshots=())
+    recording(caller)
     with pytest.raises(NotEnabled):
-        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -638,9 +695,10 @@ async def test_a_copy_needs_the_picture_opt_in_too(make_house, monkeypatch, tmp_
 @pytest.mark.parametrize("start, seconds, words", [("1760000000", 0, "seconds"), ("1760000000", 301, "seconds"), ("2099-01-01 00:00", 10, "past"), ("2999-01-01 00:00", 10, "year 2000")])
 async def test_a_copy_is_bounded_and_in_the_past(make_house, monkeypatch, tmp_path, start, seconds, words):
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
-    reg, _, _ = make_house(snapshots=("hallway-cam",))
+    reg, caller, _ = make_house(snapshots=("hallway-cam",))
+    recording(caller)
     with pytest.raises(BadRequest, match=words):
-        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), start, seconds)
+        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), start, seconds, caller)
 
 
 @pytest.mark.anyio
@@ -651,9 +709,10 @@ async def test_a_failed_copy_leaves_no_file_behind(make_house, monkeypatch, tmp_
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
     async with FakeCamera(TAPO_PASSWORD, [], script=refuse) as camera:
         to_fake(camera, monkeypatch)
-        reg, _, _ = make_house(snapshots=("hallway-cam",))
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
         with pytest.raises(DeviceUnavailable, match="refused the request"):
-            await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+            await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -662,9 +721,10 @@ async def test_a_time_without_video_leaves_no_empty_file(make_house, monkeypatch
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
     async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([])) as camera:
         to_fake(camera, monkeypatch)
-        reg, _, _ = make_house(snapshots=("hallway-cam",))
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
         with pytest.raises(DeviceUnavailable, match="no video"):
-            await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+            await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -715,8 +775,9 @@ async def test_a_copy_is_readable_only_by_its_owner(make_house, monkeypatch, tmp
     try:
         async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"v" * 188])) as camera:
             to_fake(camera, monkeypatch)
-            reg, _, _ = make_house(snapshots=("hallway-cam",))
-            out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+            reg, caller, _ = make_house(snapshots=("hallway-cam",))
+            recording(caller)
+            out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     finally:
         os.umask(old)
     assert os.stat(out["file"]).st_mode & 0o777 == 0o600
@@ -740,8 +801,9 @@ async def test_a_name_that_is_taken_is_never_written_through_or_replaced(make_ho
         taken.write_text("an older copy")
     async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"v" * 188])) as camera:
         to_fake(camera, monkeypatch)
-        reg, _, _ = make_house(snapshots=("hallway-cam",))
-        out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
+        out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert out["file"] == str(folder / f"hallway-cam-{stamp}-10s-2.ts") and Path(out["file"]).read_bytes() == b"v" * 188
     assert outside.read_text() == "keep me" and not (tmp_path / "not-there-yet").exists()
     assert taken.is_symlink() == (planted != "file")
@@ -754,9 +816,10 @@ async def test_a_relative_clip_folder_is_refused(make_house, monkeypatch, tmp_pa
     monkeypatch.chdir(tmp_path)
     (tmp_path / "clips").mkdir()
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, "clips")
-    reg, _, _ = make_house(snapshots=("hallway-cam",))
+    reg, caller, _ = make_house(snapshots=("hallway-cam",))
+    recording(caller)
     with pytest.raises(NotEnabled, match="full path"):
-        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert list((tmp_path / "clips").iterdir()) == []
 
 
@@ -773,8 +836,9 @@ async def test_giving_up_on_a_copy_removes_the_partial_file_and_lets_the_camera_
     monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(tmp_path))
     async with FakeCamera(TAPO_PASSWORD, [], script=endless) as camera:
         to_fake(camera, monkeypatch)
-        reg, _, _ = make_house(snapshots=("hallway-cam",))
-        task = asyncio.create_task(camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 60))
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
+        task = asyncio.create_task(camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 60, caller))
         for _ in range(200):
             await asyncio.sleep(0.02)
             if any(tmp_path.iterdir()):
@@ -793,8 +857,9 @@ async def test_a_copy_stops_at_the_size_cap_and_keeps_what_fits(make_house, monk
     monkeypatch.setattr(camera_media, "CLIP_MAX_BYTES", 188 * 10)
     async with FakeCamera(TAPO_PASSWORD, [], script=recording_script([b"v" * 188] * 30)) as camera:
         to_fake(camera, monkeypatch)
-        reg, _, _ = make_house(snapshots=("hallway-cam",))
-        out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10)
+        reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
+        out = await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
     assert out["bytes"] == 188 * 10 == os.path.getsize(out["file"]) and out["stopped"] == "size limit reached"
     assert out.get("complete") is not True
 
@@ -810,6 +875,7 @@ async def test_no_answer_error_or_file_name_carries_the_password(make_house, mcp
     async with FakeCamera(LONG_PASSWORD, [], script=recording_script([b"v" * 188])) as good:
         to_fake(good, monkeypatch)
         reg, caller, _ = make_house(snapshots=("hallway-cam",))
+        recording(caller)
         with_password(reg)
         async with mcp(reg, caller) as client:
             seen.append(json.dumps((await client.call_tool("camera_clip_download", {"camera": "hallway-cam", "start_time": "1760000000", "seconds": 10})).structured_content))
@@ -817,6 +883,7 @@ async def test_no_answer_error_or_file_name_carries_the_password(make_house, mcp
         async with FakeCamera("not the account password", [], script=recording_script([b"v"])) as bad:
             to_fake(bad, monkeypatch)
             reg, caller, _ = make_house(snapshots=("hallway-cam",))
+            recording(caller)
             with_password(reg)
             async with mcp(reg, caller) as client:
                 result = await client.call_tool(tool, {"camera": "hallway-cam", **args})
@@ -870,12 +937,13 @@ async def test_sequences_and_copies_respect_the_privacy_mode(make_house, monkeyp
     async with FakeCamera(TAPO_PASSWORD, [STREAM] * 4, script=None) as camera:
         to_fake(camera, monkeypatch)
         live_channel(camera, monkeypatch)
-        reg, _, devices = make_house(snapshots=("hallway-cam",), ffmpeg=frames_ffmpeg[0])
+        reg, caller, devices = make_house(snapshots=("hallway-cam",), ffmpeg=frames_ffmpeg[0])
+        recording(caller)
         devices["cam"].features["state"].value = False  # privacy mode on
         entry = reg.resolve_one("hallway-cam")
         with pytest.raises(Forbidden):
             if what == "frames":
                 await camera_media.live_frames(reg, entry, 3, 3, "low")
             else:
-                await camera_media.download_clip(reg, entry, "1760000000", 10)
+                await camera_media.download_clip(reg, entry, "1760000000", 10, caller)
     assert camera.heads == [] and list(clips.iterdir()) == [] and not frames_ffmpeg[1].exists()

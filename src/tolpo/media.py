@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable
@@ -467,6 +468,30 @@ async def live_chunks(
             if item.mime != "video/mp2t":
                 continue  # audio, or a part this client does not use
             yield item.media()
+    finally:
+        await session.close()
+
+
+async def playback_chunks(
+    host: str, password: str, start: int, end: int, *, port: int = MEDIA_PORT, timeout: float = CONNECT_TIMEOUT,
+    psk_port: int = PSK_PORT,
+) -> AsyncIterator[bytes]:
+    """Yield decrypted MPEG-TS of a recording from the camera's memory card, from `start` on. Checked on a C465: the
+    camera answers, then streams faster than real time, and it ignores `end` and plays on into the next recordings, so
+    the caller stops reading when it has what it needs. Closes the connection when the generator is closed, after asking
+    the camera to stop. Logs in exactly once."""
+    session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout, what="the recording")
+    await session.open()
+    try:
+        request = {"playback": {"client_id": secrets.randbelow(2**31), "scale": "1/1", "start_time": str(start), "end_time": str(end)}, "method": "get"}
+        await session.request(request, {"X-Data-Window-Size": str(WINDOW_SIZE)})
+        async for item in session.events(ack=True):
+            if isinstance(item, Notice):
+                if item.event == "stream_finish" or (item.event == "stream_status" and item.params.get("status") == "finished"):
+                    return
+                continue  # for example change_aov_type, which only says that the recording changed its frame rate mode
+            if item.mime == "video/mp2t":
+                yield item.media()
     finally:
         await session.close()
 

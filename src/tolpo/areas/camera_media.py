@@ -417,18 +417,24 @@ async def thumbnail(registry: Registry, entry: Entry, start_time: str | None, fi
         raise BadRequest("give either start_time (a recording's start) or file_id (an event from camera_recordings_events)")
     if file_id is not None and not FILE_ID.fullmatch(file_id):
         raise BadRequest("file_id is not one the camera gave out")
-    # UNVERIFIED: both request shapes. The app also sends the camera's MAC address here; tolpo leaves it out.
-    if file_id is not None:
-        request = {"download": {"media_type": 2, "file_id": file_id}}
-    else:
-        request = {"image": {"type": "playback_display", "start_time": str(_when(start_time, "start_time")), "channel": 0}}
+    start = _when(start_time, "start_time") if start_time is not None else None
     await _video_allowed(registry, entry)
     host, port = media_address(entry)
+    password = registry.cfg.password
+    ffmpeg = registry.cfg.ffmpeg or "ffmpeg"
     async with entry.picture_lock:
         try:
-            fmt, data = await media.fetch_image(host, registry.cfg.password, request, port=port)
+            if file_id is not None:
+                # UNVERIFIED: the request shape. The recordings of the owner's cameras carry no file id, so none was tried.
+                request = {"download": {"media_type": 2, "file_id": file_id}}
+                fmt, data = await media.fetch_image(host, password, request, port=port)
+                async with registry.grabs:
+                    return await snapshot.decode_still(data, fmt, ffmpeg=ffmpeg)
+            # Checked on a C465 and a C610: the cover picture request the app uses gets no answer from them. A picture of
+            # a past moment is the first frame of a playback from that moment, taken the way a live picture is.
+            feed = media.playback_chunks(host, password, start, start + 2, port=port)
             async with registry.grabs:
-                return await snapshot.decode_still(data, fmt, ffmpeg=registry.cfg.ffmpeg or "ffmpeg")
+                return await snapshot.grab(feed=feed, ffmpeg=ffmpeg, max_width=640, secrets=(password,))
         except GrabError as exc:
             raise registry.picture_failure(entry, exc) from None
 
@@ -491,26 +497,42 @@ def _publish(partial: Path, folder: Path, base: str) -> Path:
     raise DeviceUnavailable("the clip folder already holds too many copies of that recording")
 
 
-async def download_clip(registry: Registry, entry: Entry, start_time: str, seconds: int) -> dict[str, Any]:
+async def recording_at(registry: Registry, caller: Any, entry: Entry, start: int) -> tuple[int, int]:
+    """The start and end of the recording on the memory card that holds the moment `start`."""
+    day = datetime.fromtimestamp(start).date().isoformat()
+    for segment in (await recordings_of_day(registry, caller, entry, day))["segments"]:
+        first, length = segment.get("start_ts"), segment.get("seconds")
+        if first and length and first <= start < first + length:
+            return first, first + length
+    raise BadRequest("the camera has no recording at that time; camera_recordings_day lists what it has")
+
+
+async def download_clip(registry: Registry, entry: Entry, start_time: str, seconds: int, caller: Any) -> dict[str, Any]:
+    """Copy the whole recording that holds `start_time`. The camera only gives out a recording from its exact start to its
+    exact end (checked on a C465: any other window gets no video), so `seconds` is the longest recording accepted."""
     if not 1 <= seconds <= CLIP_MAX_SECONDS:
         raise BadRequest(f"seconds must be 1 to {CLIP_MAX_SECONDS}")
     start = _when(start_time, "start_time")
-    if start + seconds > time.time() + 60:
+    if start > time.time() + 60:
         raise BadRequest("the clip must be in the past")
     folder = clip_folder(registry)
     await _video_allowed(registry, entry)
+    first, last = await recording_at(registry, caller, entry, start)
+    length = last - first
+    if length > seconds:
+        raise BadRequest(f"that recording is {length} seconds long, longer than the {seconds} you allowed")
     # The name holds only the slug (letters, digits and dashes) and numbers: nothing the camera or the agent wrote.
-    base = f"{entry.slug}-{datetime.fromtimestamp(start).strftime('%Y%m%d-%H%M%S')}-{seconds}s"
+    base = f"{entry.slug}-{datetime.fromtimestamp(first).strftime('%Y%m%d-%H%M%S')}-{length}s"
     host, port = media_address(entry)
-    # UNVERIFIED: the request shape. media_type 0 is video; times are seconds as text, like the app sends them.
-    request = {"download": {"media_type": 0, "start_time": str(start), "end_time": str(start + seconds)}}
+    # Checked on a C465: channels, a client id, the media type (0 is video) and the exact start and end, times as text.
+    request = {"download": {"channels": [0], "client_id": secrets.randbelow(2**31), "media_type": 0, "start_time": str(first), "end_time": str(last)}}
     async with entry.picture_lock:
         partial, sink = _open_partial(folder, base)  # only a file this call created is ever removed below
         try:
             with sink:
                 result = await media.download(
                     host, registry.cfg.password, request, sink.write, port=port,
-                    max_bytes=CLIP_MAX_BYTES, max_seconds=min(600.0, 30.0 + seconds * 3),
+                    max_bytes=CLIP_MAX_BYTES, max_seconds=min(600.0, 30.0 + length * 3),
                 )
             if not result.bytes:
                 raise DeviceUnavailable(f"{entry.slug} sent no video for that time; check camera_recordings_day for what exists")
@@ -659,14 +681,15 @@ def tools(ctx):
     @ctx.tool(title="Copy a recording to a file", tier=Tier.CONTROL)
     async def camera_clip_download(
         camera: CameraRef,
-        start_time: Annotated[str, Field(description="Start: `start_ts` from camera_recordings_day, or 'YYYY-MM-DD HH:MM:SS' local time")],
-        seconds: Annotated[int, Field(description=f"Length in seconds, 1 to {CLIP_MAX_SECONDS}", ge=1, le=CLIP_MAX_SECONDS)] = 60,
+        start_time: Annotated[str, Field(description="A moment inside the recording: `start_ts` from camera_recordings_day, or 'YYYY-MM-DD HH:MM:SS' local time")],
+        seconds: Annotated[int, Field(description=f"The longest recording to accept, in seconds, 1 to {CLIP_MAX_SECONDS}", ge=1, le=CLIP_MAX_SECONDS)] = 60,
     ) -> dict[str, Any]:
-        """Copy a piece of recorded video from a camera's memory card into the folder the owner chose, as an MPEG-TS
-        file the owner can play. You get the file's path and size, never the video. Needs a camera enabled for
-        pictures and a folder set up by the owner."""
+        """Copy the whole recording that holds a moment from a camera's memory card into the folder the owner chose, as an
+        MPEG-TS file the owner can play. The camera gives out a recording only from its start to its end, so a
+        recording longer than `seconds` is refused with its length. You get the file's path and size, never the video.
+        Needs a camera enabled for pictures and a folder set up by the owner."""
         with ctx.translated():
-            return await download_clip(reg, await resolve(camera), start_time, seconds)
+            return await download_clip(reg, await resolve(camera), start_time, seconds, ctx.caller)
 
 
 # ---- HTTP routes ---------------------------------------------------------------------------------------------
