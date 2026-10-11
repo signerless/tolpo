@@ -87,6 +87,15 @@ async def test_a_hub_that_does_not_list_the_camera_is_an_error_and_sends_nothing
         await area.detection_get(reg, caller, CAM, "motion")
 
 
+async def test_a_hub_that_promises_more_children_than_it_lists_is_asked_only_once(make_house):
+    reg, caller, _ = house(make_house, kind="doorbell")
+    reg.resolve_one(CAM).root = reg.resolve_one("tapo-h200")
+    caller.respond("getChildDeviceComponentList", {"child_component_list": [], "sum": 99})
+    with pytest.raises(BadRequest, match="did not report"):
+        await area.detection_get(reg, caller, CAM, "motion")
+    assert caller.methods_sent() == ["getChildDeviceComponentList"]
+
+
 @pytest.mark.parametrize("detection", area.DETECTIONS)
 async def test_every_detection_write_refused_by_level(make_house, detection):
     reg, caller, _ = house(make_house, tier=1)
