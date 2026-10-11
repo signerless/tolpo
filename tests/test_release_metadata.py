@@ -1,5 +1,6 @@
 """Guards for what gets published: the registry file, the README that PyPI will render, and the version."""
 
+import fnmatch
 import json
 import os
 import re
@@ -43,6 +44,16 @@ def test_npm_package_ships_what_its_launcher_needs():
     assert "src/tolpo/*.py" in files  # explicit, so compiled caches never ship
     pyproject = (ROOT / "pyproject.toml").read_text()
     assert 'readme = "README.md"' in pyproject and 'license-files = ["LICENSE"]' in pyproject  # the launcher builds from this
+
+
+def test_npm_package_ships_every_python_module():
+    """A module that package.json leaves out works from a checkout and is missing from the published package."""
+    patterns = [f for f in PACKAGE["files"] if f.startswith("src/tolpo/") and f.endswith("*.py")]
+    modules = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "src" / "tolpo").rglob("*.py"))
+    left_out = [
+        m for m in modules if not any(fnmatch.fnmatchcase(m, pat) and m.count("/") == pat.count("/") for pat in patterns)
+    ]
+    assert modules and not left_out, left_out
 
 
 def test_readme_has_no_relative_paths_that_would_break_on_pypi():

@@ -29,6 +29,8 @@
   "files": [
     "bin/",
     "src/tolpo/*.py",
+    "src/tolpo/areas/*.py",
+    "src/tolpo/automation/*.py",
     "pyproject.toml",
     "README.md",
     "LICENSE"
