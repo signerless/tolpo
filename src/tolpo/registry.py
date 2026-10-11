@@ -35,6 +35,16 @@ CACHE_MAX_AGE = 30 * 24 * 3600  # forget a remembered host only after this long 
 LOGIN_COOLDOWN = 300.0  # after a camera rejects the login, leave it alone this long: repeated failures can lock it out
 
 
+def describe_failure(exc: KasaException) -> str:
+    """What went wrong, in words that are safe to show an agent. The library's own text can carry the device's
+    address or text the device chose, so only the device's error code or the kind of failure is used."""
+    code = getattr(exc, "error_code", None)
+    if code is not None:
+        return f"error code {getattr(code, 'name', code)}"
+    kind = type(exc).__name__.lstrip("_")
+    return {"ConnectionError": "the connection failed", "UnsupportedDeviceError": "this device is not supported"}.get(kind, kind)
+
+
 class RegistryError(Exception):
     status_code = 400
     detail = ""  # for the owner at a terminal only; never put in an API or tool response
@@ -533,7 +543,7 @@ class Registry:
         except TimeoutError as exc:
             raise DeviceUnavailable(f"{entry.slug} did not answer in time") from exc
         except KasaException as exc:
-            raise DeviceUnavailable(f"{entry.slug} reported an error: {exc}") from exc
+            raise DeviceUnavailable(f"{entry.slug} reported an error: {describe_failure(exc)}") from exc
 
     async def guarded(self, entry: Entry, op: Callable[[], Awaitable[Any]]) -> Any:
         """Run `op` on the device's connection, one at a time per hub or device, and return what it returns."""
