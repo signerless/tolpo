@@ -146,6 +146,7 @@ async def test_alarm_settings_denied_and_device_errors(make_house, family):
 
 @pytest.mark.parametrize("family,kwargs", [("H100", {"duration": 0}), ("H200", {"duration": 6001}),
                                            ("H100", {"volume": 5}), ("H200", {"volume": "high"}),
+                                           ("H100", {"volume": "mute"}), ("H200", {"volume": 0}), ("H200", {"duration": 0}),
                                            ("H200", {"volume": True}), ("H100", {}), ("H200", {"sound": "invented"})])
 async def test_invalid_alarm_settings_never_write(make_house, family, kwargs):
     reg, caller, _ = alarm_house(make_house, family, tier=3)
@@ -165,7 +166,6 @@ def sensor_house(make_house, **kwargs):
 SENSOR_WRITES = [
     ("sensor_sensitivity", "motion-sensor", "set_sensitivity_info", {"sensitivity": "high", "report_interval": 30},
      {"sensitivity": "high", "report_interval": 30}),
-    ("sensor_alarm_set", "leak-sensor", "set_alarm_config", {"volume": "low", "duration": 20}, {"volume": "low", "duration": 20}),
     ("sensor_comfort_temperature", "temp-sensor", "set_comfort_temp_config",
      {"minimum": 18, "maximum": 24, "unit": "celsius", "notification": True},
      {"min_temp": 18, "max_temp": 24, "temp_unit": "celsius", "notification": True}),
@@ -375,6 +375,11 @@ async def test_valve_inputs_and_contact_hub_membership(make_house):
                lambda: hub.valve_night(reg, caller, "radiator", True, 1440, 600),
                lambda: hub.valve_night(reg, caller, "radiator", True, 600, 600),
                lambda: hub.valve_frost(reg, caller, "radiator", -1, "celsius", confirm="set_frost_protection radiator"),
+               lambda: hub.valve_frost(reg, caller, "radiator", 4, "celsius", confirm="set_frost_protection radiator"),
+               lambda: hub.valve_frost(reg, caller, "radiator", 16, "celsius", confirm="set_frost_protection radiator"),
+               lambda: hub.valve_frost(reg, caller, "radiator", 40, "fahrenheit", confirm="set_frost_protection radiator"),
+               lambda: hub.valve_frost(reg, caller, "radiator", 60, "fahrenheit", confirm="set_frost_protection radiator"),
+               lambda: hub.valve_frost(reg, caller, "radiator", 10, "kelvin", confirm="set_frost_protection radiator"),
                lambda: hub.valve_shutdown(reg, caller, "radiator", True, "unknown"),
                lambda: hub.valve_work_mode(reg, caller, "radiator", "unknown"),
                lambda: hub.valve_maintenance(reg, caller, "radiator", "unknown"),
@@ -575,3 +580,48 @@ async def test_events_never_poll_children_on_another_hub(make_house):
     with pytest.raises(RegistryError, match="no trigger log on"):
         await hub.recent_events(reg, caller, "tapo-h200", device="other-sensor")
     assert caller.sent == []
+
+
+@pytest.mark.parametrize("minimum,unit", [(5, "celsius"), (15, "celsius"), (41, "fahrenheit"), (59, "fahrenheit")])
+async def test_frost_minimum_accepts_the_app_range(make_house, minimum, unit):
+    reg, caller, _ = valve_house(make_house, tier=3)
+    result = await hub.valve_frost(reg, caller, "radiator", minimum, unit, confirm="set_frost_protection radiator")
+    assert result["changed"] == {"min_temp": minimum, "temp_unit": unit}
+    assert caller.sent == [("radiator", "set_frost_protection", {"min_temp": minimum, "temp_unit": unit})]
+
+
+async def test_leak_siren_settings_are_level_3_with_confirmation(make_house, mcp, monkeypatch):
+    args = {"device": "leak-sensor", "volume": "mute", "duration": 20}
+    reg, caller, _ = sensor_house(make_house, tier=2)
+    async with mcp(reg, caller) as client:
+        result = await client.call_tool("sensor_alarm_set", dict(args, confirm="set_alarm_config leak-sensor"))
+    assert result.is_error and "level 3" in result.content[0].text and caller.sent == []
+    reg, caller, _ = sensor_house(make_house, tier=3)
+    refreshed = []
+    async def refresh(entry, *, force=False):
+        refreshed.append((entry.slug, force))
+    monkeypatch.setattr(reg, "refresh", refresh)
+    caller.respond("set_alarm_config", {"password": "SECRET"})
+    async with mcp(reg, caller) as client:
+        for phrase in (None, "set_alarm_config tapo-h200", "play_alarm leak-sensor"):
+            result = await client.call_tool("sensor_alarm_set", dict(args, confirm=phrase))
+            assert result.is_error and "set_alarm_config leak-sensor" in result.content[0].text
+        assert caller.sent == []
+        result = await client.call_tool("sensor_alarm_set", dict(args, confirm="set_alarm_config leak-sensor"))
+        caller.respond("set_alarm_config", DeviceError("failed", error_code=None))
+        error = await client.call_tool("sensor_alarm_set", dict(args, confirm="set_alarm_config leak-sensor"))
+    assert result.structured_content == {"device": "leak-sensor", "changed": {"volume": "mute", "duration": 20}}
+    assert caller.sent[0] == ("leak-sensor", "set_alarm_config", {"volume": "mute", "duration": 20})
+    assert refreshed == [("leak-sensor", True)]
+    assert error.is_error and "leak-sensor" in error.content[0].text
+
+
+async def test_events_read_only_sensor_and_switch_children(make_house):
+    reg, caller, devices = valve_house(make_house, tier=0)
+    for child in devices["hub"].children:
+        child.modules[Module.TriggerLogs] = object()
+    caller.respond("get_trigger_logs", {"logs": [], "start_id": 0, "sum": 0})
+    assert await hub.recent_events(reg, caller, "tapo-h200") == []
+    assert "radiator" not in {slug for slug, _, _ in caller.sent}
+    assert {method for _, method, _ in caller.sent} == {"get_trigger_logs"}
+

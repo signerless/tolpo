@@ -16,7 +16,8 @@ from ..registry import Registry, RegistryError
 from ..views import clean
 
 METHODS = [
-    policy.method("get_trigger_logs", Tier.READ, ["sensor"], "Read recent child trigger events."),
+    # Same level and kinds as the automation area, which polls the same log.
+    policy.method("get_trigger_logs", Tier.READ, ["sensor", "switch"], "Read recent child trigger events."),
     *[policy.method(name, Tier.READ, ["hub"], summary) for name, summary in (
         ("get_alarm_configure", "Read the hub alarm settings."),
         ("get_support_alarm_type_list", "Read the hub alarm and chime tones."),
@@ -49,13 +50,17 @@ SENSOR_SETTINGS = {
 METHODS += [policy.method(spec[0], Tier.READ, ["sensor"], f"Read the sensor {name.replace('_', ' ')} setting.")
             for name, spec in SENSOR_SETTINGS.items()]
 METHODS += [policy.method(spec[1], Tier.SETTING, ["sensor"], f"Change the sensor {name.replace('_', ' ')} setting.")
-            for name, spec in SENSOR_SETTINGS.items()]
+            for name, spec in SENSOR_SETTINGS.items() if name != "alarm"]
+# The leak siren is a protection: muting it or shortening it weakens leak warnings, so its settings are level 3.
+METHODS += [policy.method("set_alarm_config", Tier.SECURITY, ["sensor"],
+                          "Change the leak sensor siren volume, tone or duration, which can mute leak warnings.")]
 METHODS += [policy.method("play_alarm", Tier.SECURITY, ["sensor"], "Test the leak sensor's audible siren.")]
 ValveSetting = Literal["boost", "hold", "window", "calibration", "descaling", "descaling_auto",
                        "shutdown", "work_mode", "night_mode", "early_start", "frost", "schedule"]
 ValveMode = Literal["silent_mode", "standard_mode", "turbo_mode"]
 ScheduleMode = Literal["everyday", "weekday_sat_sun"]
 VALVE_KINDS = {"valve", "thermostat"}
+EVENT_KINDS = {"sensor", "switch"}  # children whose trigger log tolpo reads (contact, motion, leak, button, dial)
 VALVE_SETTINGS = {
     "boost": ("get_boost_info", ("enable", "boost_time", "boost_remain_time")),
     "hold": ("get_holdon_info", ("enable", "hold_on_time", "hold_on_remain_time")),
@@ -208,17 +213,21 @@ async def set_alarm(registry, caller, device: str, *, sound: str | None = None,
     if sound is None and volume is None and duration is None:
         raise RegistryError("Choose at least one alarm setting")
     if duration is not None:
-        _integer(duration, 0 if cam else 1, 6000 if cam else 600, "duration")
+        # UNVERIFIED: python-kasa allows 0 on H200, but what 0 means (no sound or no time limit) is unknown.
+        # A siren must always stop by itself, so 0 is refused.
+        _integer(duration, 1, 6000 if cam else 600, "duration")
     if volume is not None:
+        # Muting the hub siren removes a safety net. setSirenConfig is level 2 in every area, so this
+        # level 2 tool refuses mute (H100 "mute", H200 0) instead of hiding a level 3 action inside it.
         if cam:
-            _integer(volume, 0, 10, "volume")
+            _integer(volume, 1, 10, "volume")
         else:
-            _choice(volume, ("mute", "low", "normal", "high"), "volume")
+            _choice(volume, ("low", "normal", "high"), "volume")
     if sound is not None:
         # Compare raw names, not shortened display labels.
         method = "getSirenTypeList" if cam else "get_support_alarm_type_list"
         tones = _object(await caller.call(entry, method, {"siren": {}} if cam else None), entry, method)
-        tones = tones.get("siren", tones)
+        tones = _object(tones.get("siren", tones), entry, method)
         _choice(sound, tones.get("siren_type_list" if cam else "alarm_type_list", []), "sound")
     changed = {}
     if sound is not None:
@@ -258,18 +267,20 @@ async def sensor_setting(registry, caller, device: str, setting: SensorSetting) 
     return {"device": clean(entry.slug), "setting": setting, "values": _fields(data, fields)}
 
 
-async def _sensor_write(registry, caller, device, setting, params):
+async def _sensor_write(registry, caller, device, setting, params, *, confirm=None):
     _, method, models, fields = SENSOR_SETTINGS[setting]
     entry = _child(registry, device, {"sensor"}, models)
-    return await _write(registry, caller, entry, method, params, _fields(params, fields))
+    return await _write(registry, caller, entry, method, params, _fields(params, fields), confirm=confirm)
 
 
 async def set_sensitivity(registry, caller, device: str, *, sensitivity: str | None = None,
                           report_interval: int | None = None) -> dict[str, Any]:
     params = {}
     if sensitivity is not None:
+        # UNVERIFIED: the audit infers the `sensitivity` field name from an unannotated app field.
         params["sensitivity"] = _choice(sensitivity, ("low", "normal", "high"), "sensitivity")
     if report_interval is not None:
+        # UNVERIFIED: the real interval limits are unknown. The owner's sensors report 16 seconds.
         params["report_interval"] = _integer(report_interval, 1, 86400, "report_interval")
     if not params:
         raise RegistryError("Choose sensitivity or report interval")
@@ -277,9 +288,10 @@ async def set_sensitivity(registry, caller, device: str, *, sensitivity: str | N
 
 
 async def set_sensor_alarm(registry, caller, device: str, volume: Volume, *, duration: int | None = None,
-                           sound: str | None = None) -> dict[str, Any]:
+                           sound: str | None = None, confirm=None) -> dict[str, Any]:
     params = {"volume": _choice(volume, ("mute", "low", "normal", "high"), "volume")}
     if duration is not None:
+        # UNVERIFIED: the T300 duration limits are not in the audit. 1 to 600 seconds matches the H100 siren.
         params["duration"] = _integer(duration, 1, 600, "duration")
     if sound is not None:
         if not isinstance(sound, str) or not sound or len(sound) > 64 or clean(sound) != sound:
@@ -290,7 +302,7 @@ async def set_sensor_alarm(registry, caller, device: str, volume: Volume, *, dur
         if sound != config.get("type"):
             raise RegistryError("The sensor alarm tone must match its current type")
         params["type"] = sound
-    return await _sensor_write(registry, caller, device, "alarm", params)
+    return await _sensor_write(registry, caller, device, "alarm", params, confirm=confirm)
 
 
 async def test_sensor_alarm(registry, caller, device: str, volume: Volume, *, confirm=None) -> dict[str, Any]:
@@ -467,7 +479,8 @@ async def valve_early(registry, caller, device: str, enabled: bool) -> dict[str,
 
 async def valve_frost(registry, caller, device: str, minimum: int, unit: Unit, *, confirm=None) -> dict[str, Any]:
     _choice(unit, ("celsius", "fahrenheit"), "temperature unit")
-    _integer(minimum, 0 if unit == "celsius" else 32, 30 if unit == "celsius" else 86, "minimum")
+    # The app offers only 5 to 15 C and 41 to 59 F. A lower minimum risks frozen pipes.
+    _integer(minimum, 5 if unit == "celsius" else 41, 15 if unit == "celsius" else 59, "minimum")
     params = {"min_temp": minimum, "temp_unit": unit}
     return await _write(registry, caller, _valve(registry, device), "set_frost_protection", params, params, confirm=confirm)
 
@@ -579,6 +592,7 @@ async def hub_diagnostics(registry, caller, device: str) -> dict[str, Any]:
     entry = _entry(registry, device, {"hub"})
     cam = _smartcam(entry)
     method = "getDeviceLoadInfo" if cam else "get_device_load_info"
+    # UNVERIFIED: getDeviceLoadInfo and its `deviceLoad` module are app names. The H200 parameter shape is a guess.
     data = _object(await caller.call(entry, method, {"deviceLoad": {}} if cam else None), entry, method)
     data = _object(data.get("deviceLoad", data), entry, method)
     return {"device": clean(entry.slug), **_fields(data, ("cur_load_num", "max_load_num", "load_level",
@@ -618,7 +632,9 @@ async def recent_events(registry: Registry, caller: DeviceCaller, hub: str, *, d
     if after is not None:
         _integer(after, 0, 253402300799, "after")
     parent = _entry(registry, hub, {"hub"})
-    children = [e for e in registry.entries() if e.root is parent and Module.TriggerLogs in e.device.modules]
+    # Only children of this hub. A child of another hub is never read through this one.
+    children = [e for e in registry.entries()
+                if e.root is parent and e.kind in EVENT_KINDS and Module.TriggerLogs in e.device.modules]
     if device is not None:
         child = registry.resolve_one(device)
         if child not in children:
@@ -626,6 +642,8 @@ async def recent_events(registry: Registry, caller: DeviceCaller, hub: str, *, d
         children = [child]
     events = {}
     for child in children:
+        # UNVERIFIED: page_size 10 and no page_size were accepted by the owner's sensors (empty logs).
+        # Whether firmware honors 100 or caps it lower is unknown.
         data = _object(await caller.call(child, "get_trigger_logs", {"start_id": 0, "page_size": 100}),
                        child, "get_trigger_logs")
         logs = data.get("logs")
@@ -807,7 +825,7 @@ def tools(ctx):
     @ctx.tool(title="Set valve frost minimum", tier=Tier.SECURITY)
     async def valve_frost_set(
         device: DeviceRef,
-        minimum: Annotated[int, Field(description="Minimum frost-protection temperature. Lowering this can risk frozen pipes")],
+        minimum: Annotated[int, Field(description="Frost-protection minimum: 5 to 15 C or 41 to 59 F. Lowering it can risk frozen pipes")],
         unit: Annotated[Unit, Field(description="Temperature unit")],
         confirm: Confirmation = None,
     ) -> dict[str, Any]:
@@ -856,17 +874,23 @@ def tools(ctx):
         with ctx.translated():
             return await set_sensitivity(ctx.registry, ctx.caller, device, sensitivity=sensitivity, report_interval=report_interval)
 
-    @ctx.tool(title="Set leak sensor siren settings", tier=Tier.SETTING)
+    @ctx.tool(title="Set leak sensor siren settings", tier=Tier.SECURITY)
     async def sensor_alarm_set(
         device: DeviceRef,
         volume: Annotated[Volume, Field(description="Leak siren volume. Mute silences leak warnings")],
         duration: Annotated[int | None, Field(description="Siren duration in seconds", ge=1, le=600)] = None,
         sound: Annotated[str | None, Field(description="Optional current tone type from sensor_settings")] = None,
+        confirm: Confirmation = None,
     ) -> dict[str, Any]:
-        """Set T300 leak siren volume and duration. Does not sound the alarm."""
+        """Set T300 leak siren volume and duration. Does not sound the alarm.
+
+        Level 3, because muting or shortening the siren weakens leak warnings.
+        Requires confirm='set_alarm_config <sensor id>'.
+        """
         await ctx.ready_for([device])
         with ctx.translated():
-            return await set_sensor_alarm(ctx.registry, ctx.caller, device, volume, duration=duration, sound=sound)
+            return await set_sensor_alarm(ctx.registry, ctx.caller, device, volume, duration=duration, sound=sound,
+                                          confirm=confirm)
 
     @ctx.tool(title="Test leak sensor siren", tier=Tier.SECURITY)
     async def sensor_siren(
@@ -934,10 +958,10 @@ def tools(ctx):
     async def hub_alarm_set(
         device: DeviceRef,
         sound: Annotated[str | None, Field(description="Exact tone name from hub_alarm_config")] = None,
-        volume: Annotated[str | int | None, Field(description="H100: mute, low, normal, high. H200: integer 0 to 10")] = None,
-        duration: Annotated[int | None, Field(description="Seconds. H100: 1 to 600. H200: 0 to 6000")] = None,
+        volume: Annotated[str | int | None, Field(description="H100: low, normal or high. H200: integer 1 to 10. Mute is refused")] = None,
+        duration: Annotated[int | None, Field(description="Seconds. H100: 1 to 600. H200: 1 to 6000")] = None,
     ) -> dict[str, Any]:
-        """Set hub siren or H100 chime tone, volume and duration. Does not play the sound."""
+        """Set hub siren or H100 chime tone, volume and duration. Does not play the sound. Does not mute the siren."""
         await ctx.ready_for([device])
         with ctx.translated():
             return await set_alarm(ctx.registry, ctx.caller, device, sound=sound, volume=volume, duration=duration)
