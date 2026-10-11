@@ -44,9 +44,11 @@ Pictures and recordings do not go through device methods but through the video c
 They follow the rule for live pictures: only cameras whose name is listed in `cameras.snapshots`, never a camera behind a
 hub, never while privacy mode covers the lens, and no new try for a while after the camera rejected the login.
 
-Copying recordings also needs a folder: set the environment variable `TOLPO_CLIP_DIR` to an existing folder. Without it,
-`camera_clip_download` refuses. Files are named `<camera>-<start>-<seconds>s.ts` and are never overwritten. A copy is
-limited to 300 seconds of video, 512 MB and 10 minutes of transfer.
+Copying recordings also needs a folder: set the environment variable `TOLPO_CLIP_DIR` to the full path of an existing
+folder. Without it, `camera_clip_download` refuses. Files are named `<camera>-<start>-<seconds>s.ts`, with `-2`, `-3`
+and so on when the name is taken. An existing file or symlink is never written through or replaced. Only the owner can
+read a copy (mode 0600). While it downloads, the copy is a hidden `.part` file in the same folder; it is removed when
+the copy fails or is cancelled. A copy is limited to 300 seconds of video, 512 MB and 10 minutes of transfer.
 
 The memory card's password field (cards locked with a password report one) is never returned. Nor are MAC addresses.
 
@@ -75,8 +77,8 @@ SD card playback (`sdvod`) is not built: a copy to a file covers what an agent n
 ## What is verified and what is not
 
 Read from the owner's C225, C465 and C610: the request and answer of `getSdCardStatus` and `getRecordPlan`, including
-the record plan's text form (`["0000-2400:2"]`, where 2 is event recording and 3 the low frame rate mode). The video
-channel's login, encryption and live preview work on those cameras already.
+the record plan's text form (`["0000-2400:2"]`). The video channel's login, encryption and live preview work on those
+cameras already.
 
 Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`), and marked `UNVERIFIED` in the code:
 
@@ -85,6 +87,8 @@ Tested only with fakes (FakeCaller and the fake camera in `tests/fake_camera.py`
 - The answers of `searchDateWithVideo`, `searchVideoWithUTC` and `searchDetectionList`: the list names and the item
   fields. The parser reads any list in the `playback` section and the fields the app's own classes name. Older firmware
   may answer only `searchVideoOfDay`, which needs a user id; tolpo does not send it.
+- The meaning of the record plan codes: 1 continuous, 2 events, 3 the low frame rate mode, from the app's code. The
+  owner's cameras show 2 and 3, but which behavior each gives was not checked.
 - The event type numbers: taken from the app's cloud list (6 person, 8 vehicle, 2 motion...). That the camera uses the
   same numbers is assumed.
 - The picture requests: `image` with `type: playback_display`, `start_time` and `channel` (the app also sends the
