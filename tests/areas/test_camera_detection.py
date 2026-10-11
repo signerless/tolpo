@@ -53,6 +53,40 @@ async def test_detection_read_write_exact_wire_and_refresh(make_house, detection
     assert caller.sent[0] == (CAM, "getAppComponentList", {"app_component": {"name": "app_component_list"}})
 
 
+async def test_a_doorbell_behind_a_hub_gets_its_components_from_the_hub(make_house):
+    """The D230 is a child of the H200. It does not answer getAppComponentList, the hub lists its components."""
+    reg, caller, devices = house(make_house, kind="doorbell")
+    entry = reg.resolve_one(CAM)
+    entry.root = reg.resolve_one("tapo-h200")
+    components = [{"name": "detection", "version": 1}, {"name": "alert", "version": 1}]
+
+    def pages(_, params):
+        start = params["childControl"]["start_index"]
+        row = {"device_id": "other" if start == 0 else entry.device.device_id, "component_list": components}
+        return {"start_index": start, "sum": 2, "child_component_list": [row]}
+
+    caller.respond("getChildDeviceComponentList", pages)
+    await area.detection_get(reg, caller, CAM, "motion")
+    asked = [(slug, method, params) for slug, method, params in caller.sent if method.endswith("ComponentList")]
+    assert asked == [
+        ("tapo-h200", "getChildDeviceComponentList", {"childControl": {"start_index": 0}}),
+        ("tapo-h200", "getChildDeviceComponentList", {"childControl": {"start_index": 1}}),
+    ]
+    assert "getAppComponentList" not in caller.methods_sent()
+
+
+async def test_a_hub_that_does_not_list_the_camera_is_an_error_and_sends_nothing_else(make_house):
+    reg, caller, _ = house(make_house, kind="doorbell")
+    reg.resolve_one(CAM).root = reg.resolve_one("tapo-h200")
+    caller.respond("getChildDeviceComponentList", {"child_component_list": [], "sum": 0})
+    with pytest.raises(BadRequest, match="did not report"):
+        await area.detection_set(reg, caller, CAM, "motion", False)
+    assert caller.methods_sent() == ["getChildDeviceComponentList"]
+    caller.respond("getChildDeviceComponentList", {"child_component_list": "nope"})
+    with pytest.raises(DeviceUnavailable, match="unexpected component response"):
+        await area.detection_get(reg, caller, CAM, "motion")
+
+
 @pytest.mark.parametrize("detection", area.DETECTIONS)
 async def test_every_detection_write_refused_by_level(make_house, detection):
     reg, caller, _ = house(make_house, tier=1)

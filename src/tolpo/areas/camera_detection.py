@@ -99,9 +99,30 @@ async def _call(caller, entry, method, params, *, confirm=None):
     return result
 
 
+async def _child_components(caller, entry):
+    """A camera or doorbell behind a hub does not answer for itself: the hub lists what its children support."""
+    start = 0
+    for _ in range(32):
+        result = await _call(caller, entry.root, "getChildDeviceComponentList", {"childControl": {"start_index": start}})
+        rows = result.get("child_component_list")
+        if not isinstance(rows, list):
+            raise DeviceUnavailable(f"{clean(entry.slug)}: the hub returned an unexpected component response")
+        for row in rows:
+            if isinstance(row, dict) and row.get("device_id") == entry.device.device_id:
+                return row.get("component_list")
+        total = result.get("sum")
+        if type(total) is not int or total < 0 or not rows or start + len(rows) >= total:
+            break
+        start += len(rows)
+    raise BadRequest(f"{clean(entry.slug)}: the hub did not report this camera's components")
+
+
 async def _components(caller, entry):
-    data = await _call(caller, entry, "getAppComponentList", {"app_component": {"name": "app_component_list"}})
-    items = _module(data, "app_component", entry).get("app_component_list")
+    if entry.root is not None and entry.root.kind == "hub":
+        items = await _child_components(caller, entry)
+    else:
+        data = await _call(caller, entry, "getAppComponentList", {"app_component": {"name": "app_component_list"}})
+        items = _module(data, "app_component", entry).get("app_component_list")
     if not isinstance(items, list):
         raise DeviceUnavailable(f"{clean(entry.slug)} did not report camera components")
     return {item["name"] for item in items if isinstance(item, dict) and isinstance(item.get("name"), str)
