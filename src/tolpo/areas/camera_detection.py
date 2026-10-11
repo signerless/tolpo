@@ -262,6 +262,8 @@ async def zones_get(registry, caller, device, detection):
     component, module, section, stem, preferred = DETECTIONS[detection]
     _require(entry, await _components(caller, entry), component, f"{detection} zones")
     method = ZONES[detection][0]
+    # UNVERIFIED: the `table` read parameter. The D230 fixture shows motion rows under motion_detection.region_info,
+    # each wrapped as region_info_N, but that came from python-kasa's plain motion_det read.
     data = await _call(caller, entry, method, {module: {"table": ["region_info"]}})
     raw = _module(data, module, entry).get("region_info")
     if not isinstance(raw, list):
@@ -281,6 +283,9 @@ async def zones_get(registry, caller, device, detection):
     return out
 
 
+# UNVERIFIED: the 0..10000 scale is seen only in the D230 motion rectangle. The scale of line, area and package points,
+# the 0..100 bounds of zone sensitivity, threshold and percentage, the 3..8 package points and the four zone limit
+# are local guesses that keep inputs small. They must be checked on a camera before they are relied on.
 def _validate_zones(detection, zones):
     if detection not in ZONES:
         raise BadRequest("This detection does not have separate zones in this area")
@@ -325,6 +330,7 @@ async def zones_set(registry, caller, device, detection, zones):
     component, module, section, stem, preferred = DETECTIONS[detection]
     _require(entry, await _components(caller, entry), component, f"{detection} zones")
     method, write_section = ZONES[detection][1:]
+    # UNVERIFIED: whether add*Region replaces or appends, what an empty list means, and these wrappers.
     # Motion, intrusion and package wrap their rows in region_info; line crossing sends the list directly.
     payload = wire if detection == "line_crossing" else {"region_info": wire}
     await _call(caller, entry, method, {module: {write_section: payload}})
@@ -350,6 +356,7 @@ async def schedule_set(registry, caller, device, detection, schedule):
                     (end == "2400" or int(end[:2]) < 24 and int(end[2:]) < 60)) or not last <= int(start) < int(end):
                 raise BadRequest("Arming windows must be valid, ordered and not overlap")
             last = int(end)
+        # UNVERIFIED: each weekday as a JSON list of HHMM-HHMM strings. The audit says plans may carry a suffix.
         patch[day] = json.dumps(windows, separators=(",", ":"))
     entry = _camera(registry, device)
     module, section, stem, preferred, config, capability, data = await _detection(caller, entry, detection)
@@ -428,6 +435,8 @@ ALARM_CAPS = ("alarm_func", "alarm_type", "alarm_duration_support", "alarm_volum
 
 async def _alarm(caller, entry):
     _require(entry, await _components(caller, entry), "alert", "camera alarm actions")
+    # UNVERIFIED: asking for `capability` in the same read. The owner's cameras answered the plain chn1_msg_alarm_info
+    # read; the audit says the capability table rides along. Without it, capability-gated writes are refused.
     data = await _call(caller, entry, "getAlertConfig", {"msg_alarm": {"name": ["chn1_msg_alarm_info", "capability"]}})
     config = _section(data, "msg_alarm", "chn1_msg_alarm_info", entry)
     capability = _module(data, "msg_alarm", entry).get("capability", {})
@@ -483,6 +492,7 @@ async def alarm_set(registry, caller, device, settings, confirm=None):
             patch[key] = _in_range(value, capability.get("alarm_volume_range"), key)
         elif key == "alarm_duration":
             _supported_flag(capability, "alarm_duration_support", entry, "alarm duration")
+            # UNVERIFIED: seconds from 1 to 600 is a local bound. The owner's cameras report "0", whose meaning is unknown.
             patch[key] = str(_integer(value, 1, 600, key))
         elif key == "light_type":
             if "light" not in capability.get("alarm_func", []):
@@ -501,6 +511,7 @@ async def manual_alarm(registry, caller, device, action=None, confirm=None):
         raise BadRequest("Manual alarm action must be start or stop")
     entry = _camera(registry, device)
     _require(entry, await _components(caller, entry), "manualAlarm", "manual alarm")
+    # UNVERIFIED: the status read parameter and the start/stop body. No owner camera reports the manualAlarm component.
     if action is None:
         result = await _call(caller, entry, "getManualAlarmStatus", {"msg_alarm": {"get_manual_alarm_status": ""}})
         status = _section(result, "msg_alarm", "get_manual_alarm_status", entry)
@@ -571,6 +582,7 @@ async def _lighting(caller, entry, light):
     if light not in ("spotlight", "floodlight"):
         raise BadRequest("light must be spotlight or floodlight")
     _require(entry, await _components(caller, entry), "whiteLamp" if light == "spotlight" else "floodlight", light)
+    # UNVERIFIED: the `name` read parameters below. Module, section and field names come from the audit and app beans.
     if light == "spotlight":
         data = await _call(caller, entry, "getWhitelampCapability", {"image_capability": {"name": ["white_lamp"]}})
         capability = _section(data, "image_capability", "white_lamp", entry)
@@ -632,6 +644,7 @@ async def lighting_switch(registry, caller, device, light, enabled, confirm=None
     switch = _boolean(enabled, "enabled")
     entry = _camera(registry, device)
     await _lighting(caller, entry, light)
+    # UNVERIFIED: force_wtl_state on/off and floodlight action start/stop values. The field names are audited.
     if light == "spotlight":
         method, params = "setForceWhitelampState", {"image": {"switch": {"force_wtl_state": switch}}}
     else:
@@ -696,6 +709,7 @@ async def events_recent(registry, caller, device, start_time=None, end_time=None
     if start_time is not None:
         _require(entry, components, "playback", "SD event metadata")
         _require(entry, components, "sdCard", "SD event metadata")
+        # UNVERIFIED: channel 0, inclusive start/end indices and seconds. The reply fields match the app's bean.
         params = {"playback": {"search_detection_list": {"start_time": start_time, "end_time": end_time,
                   "channel": 0, "start_index": start_index, "end_index": start_index + limit - 1}}}
         data = await _call(caller, entry, "searchDetectionList", params)
