@@ -11,7 +11,7 @@ from kasa import Feature
 from pydantic import BaseModel, Field, JsonValue
 
 from . import policy
-from .registry import Entry, Registry, RegistryError
+from .registry import Entry, Registry, RegistryError, model_of
 
 LIGHT_SETTINGS = ("brightness", "color_temperature", "hsv")
 LOW_BATTERY_PERCENT = 20
@@ -70,7 +70,7 @@ def summary(reg: Registry, entry: Entry) -> DeviceSummary:
         id=entry.slug,
         device_id=dev.device_id,
         name=dev.alias,
-        model=dev.model,
+        model=model_of(entry),
         kind=entry.kind,
         host=None if entry.root else dev.host,
         parent=entry.root.slug if entry.root else None,

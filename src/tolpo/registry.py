@@ -34,6 +34,7 @@ UPDATE_TIMEOUT = 20.0
 LIVE_STREAMS = 2  # cameras that may send live video at the same time
 LIVE_SECONDS = 900  # longest live view of a wired camera; the viewer can start a new one
 LIVE_BATTERY_SECONDS = 120  # a battery camera stays awake while it streams, so its live view is short
+STOP_GRACE = 10.0  # how long a live view that did not start may take to close its video before the camera is given back
 SWEEP_MAX_HOSTS = 1024  # do not unicast-sweep anything larger than a /22
 BOOT_GRACE = 15.0  # at startup, stop waiting for slow devices after this long and let them finish in the background
 RETRY_DELAYS = (5.0, 15.0, 45.0)  # seconds between retries of hosts we know but could not reach
@@ -187,6 +188,7 @@ class Entry:
     last_update: float = 0.0
     online: bool = True
     error: str | None = None
+    known_model: str = ""  # the model when the device was adopted, for when the library cannot read it
 
     @property
     def top(self) -> Entry:
@@ -195,6 +197,15 @@ class Entry:
     @property
     def kind(self) -> str:
         return _KIND.get(self.device.device_type, self.device.device_type.name.lower())
+
+
+def model_of(entry: Entry) -> str:
+    """The device's model. The library reads it from the device's last answer, which after a failed update can be an
+    error code instead of the device's info, and then raises: the model seen when the device was adopted is used."""
+    try:
+        return entry.device.model
+    except Exception:
+        return entry.known_model
 
 
 class Registry:
@@ -529,6 +540,7 @@ class Registry:
                 asyncio.ensure_future(self._quiet_disconnect(old))
         entry.last_update = time.monotonic()
         entry.online, entry.error = True, None
+        entry.known_model = model_of(entry) or entry.known_model
         self._slug_seen[device_key(device)] = time.time()
         return entry
 
@@ -798,6 +810,11 @@ class Registry:
 
     async def check_picture(self, entry: Entry, quality: str) -> None:
         """Everything that must hold before any video is opened. Raises an error an agent may read."""
+        self._picture_rules(entry, quality)
+        await self._lens_open(entry)
+
+    def _picture_rules(self, entry: Entry, quality: str) -> None:
+        """The checks that need no answer from the camera."""
         if quality not in QUALITIES:
             raise BadRequest(f"quality must be one of {', '.join(QUALITIES)}")
         if entry.kind not in policy.SNAPSHOT_KINDS:
@@ -811,7 +828,8 @@ class Registry:
                 f"{entry.slug} refused the login for video a moment ago; not trying again for {LOGIN_COOLDOWN - waited:.0f} seconds"
             )
 
-        # The privacy switch is read fresh. If the camera cannot be asked, assume nothing about the lens.
+    async def _lens_open(self, entry: Entry) -> None:
+        """The privacy switch, read fresh. If the camera cannot be asked, assume nothing about the lens."""
         await self.refresh(entry, force=True)
         if not entry.online:
             raise DeviceUnavailable(f"{entry.slug} is not reachable right now")
@@ -866,8 +884,10 @@ class Registry:
     async def live_pictures(self, entry: Entry, quality: str = "low") -> AsyncIterator[bytes]:
         """Live video from a camera the owner has enabled, as JPEG pictures one after the other, for a viewer on the
         owner's own screen. The same checks as a picture. One stream per camera, LIVE_STREAMS cameras at once, and a
-        time limit that is shorter for a battery camera, because live video keeps it awake and empties its battery."""
-        await self.check_picture(entry, quality)
+        time limit that is shorter for a battery camera, because live video keeps it awake and empties its battery.
+        The privacy switch is read while the video starts, which saves a second, and no picture is handed out before
+        the switch says the lens is open."""
+        self._picture_rules(entry, quality)
         if self.lives.locked():
             raise Busy(f"{LIVE_STREAMS} cameras are already sending live video; close one first")
         try:
@@ -878,12 +898,28 @@ class Registry:
         battery = "battery_level" in entry.device.features
         seconds = LIVE_BATTERY_SECONDS if battery else LIVE_SECONDS
         url, feed, _ = self._stream(entry, quality)
+        frames = live_jpegs(url, feed=feed, quality=quality, seconds=seconds, ffmpeg=self.cfg.ffmpeg or "ffmpeg")
+
+        async def first_picture() -> bytes:
+            return await frames.__anext__()
+
+        started = time.monotonic()
+        starting = asyncio.create_task(first_picture())
         try:
-            frames = live_jpegs(url, feed=feed, quality=quality, seconds=seconds, ffmpeg=self.cfg.ffmpeg or "ffmpeg")
-            first = await frames.__anext__()
+            await self._lens_open(entry)
+            first = await starting
         except BaseException as exc:
-            self.lives.release()
-            entry.picture_lock.release()
+            log.info("live video from %s did not start after %.1f s: %s", entry.slug, time.monotonic() - started, type(exc).__name__)
+            starting.cancel()
+            try:
+                # Close the camera's video, which may have started before the answer came. Bounded, and the camera
+                # is given back whatever happens here.
+                await asyncio.wait({starting}, timeout=STOP_GRACE)
+                if starting.done():
+                    await frames.aclose()
+            finally:
+                self.lives.release()
+                entry.picture_lock.release()
             if isinstance(exc, GrabError):
                 raise self.picture_failure(entry, exc) from None
             if isinstance(exc, StopAsyncIteration):

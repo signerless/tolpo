@@ -141,3 +141,19 @@ def test_foreign_host_header_is_refused_without_token():
     with TestClient(create_app(cfg, reg, discover=False), base_url="http://localhost") as c:
         assert c.get("/devices").status_code == 200
         assert c.get("/devices", headers={"host": "evil.example"}).status_code == 400
+
+
+def test_a_device_whose_library_cannot_read_its_model_does_not_break_the_list(build, monkeypatch):
+    # Seen on a real C225: after an update failed, the library held an error code instead of the camera's info, and
+    # reading the model raised. The list of every device then failed with it.
+    client, devices = build()
+
+    def broken(self):
+        raise TypeError("'SmartErrorCode' object is not subscriptable")
+
+    cam = devices["cam"]
+    monkeypatch.setattr(type(cam), "model", property(broken), raising=False)
+    listed = client.get("/devices")
+    assert listed.status_code == 200
+    assert {d["id"]: d["model"] for d in listed.json()}["hallway-cam"] == "C225"
+    assert client.get("/devices/hallway-cam").json()["model"] == "C225"

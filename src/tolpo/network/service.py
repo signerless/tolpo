@@ -8,7 +8,7 @@ from typing import Any
 import uuid
 
 from tolpo.calls import NeedsConfirmation
-from tolpo.registry import Forbidden
+from tolpo.registry import Forbidden, model_of
 
 from .catalog import dependency, explain
 from .config import Settings, load
@@ -56,7 +56,7 @@ class Service:
             raise NetworkError("Device network identity is unavailable")
         return entry, Client(ipv4=address if ip_address(address).version == 4 else "",
                              ipv6=(address,) if ip_address(address).version == 6 else (),
-                             device=entry.slug, family=entry.kind, model=text(entry.device.model))
+                             device=entry.slug, family=entry.kind, model=text(model_of(entry)))
 
     async def status(self):
         result = []

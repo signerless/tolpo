@@ -1,15 +1,18 @@
 """Live video: JPEG pictures one after the other from a camera's stream, through the registry and the HTTP API."""
 
+import asyncio
 import os
 import time
 
+import anyio
 import pytest
 
 from tolpo import registry, snapshot
-from tolpo.registry import Busy, NotEnabled
+from tolpo.registry import Busy, DeviceUnavailable, Forbidden, NotEnabled
 
 from . import fakes
-from .test_pictures import PASSWORD, SETTINGS, house
+from .fake_camera import FakeCamera
+from .test_pictures import PASSWORD, SETTINGS, STREAM, TAPO_PASSWORD, app_channel, house
 
 
 @pytest.fixture
@@ -106,6 +109,105 @@ async def test_a_battery_camera_gets_the_short_limit(ffmpeg, monkeypatch):
     stream = await reg.live_pictures(cam)
     await stream.aclose()
     assert asked == [registry.LIVE_SECONDS, registry.LIVE_BATTERY_SECONDS]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("covered", [True, False])
+async def test_the_video_starts_while_the_privacy_switch_is_read_and_waits_for_it(ffmpeg, tmp_path, monkeypatch, covered):
+    ffmpeg.mode("live")
+    pidfile = tmp_path / "pid"
+    monkeypatch.setenv("FAKE_FFMPEG_PID", str(pidfile))
+    reg, devices = house(ffmpeg)
+    cam = reg.resolve_one("hallway-cam")
+    answer = asyncio.Event()
+
+    async def slow_camera():
+        await answer.wait()
+        devices["cam"].features["state"].value = not covered
+
+    devices["cam"].update = slow_camera
+    starting = asyncio.create_task(reg.live_pictures(cam))
+    for _ in range(300):
+        if ffmpeg.calls():
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.3)  # time for a first picture, which must wait for the answer
+    assert ffmpeg.calls() and not starting.done()
+    answer.set()
+    if covered:
+        with pytest.raises(Forbidden, match="privacy"):
+            await starting
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pidfile.read_text()), 0)  # the camera's video is closed again
+    else:
+        stream = await starting
+        assert await stream.__anext__() == fakes.TINY_JPEG
+        await stream.aclose()
+    assert not cam.picture_lock.locked() and not reg.lives.locked()
+
+
+@pytest.mark.anyio
+async def test_a_camera_that_cannot_be_asked_about_its_lens_gives_no_live_video(ffmpeg):
+    ffmpeg.mode("live")
+    reg, devices = house(ffmpeg)
+    cam = reg.resolve_one("hallway-cam")
+
+    async def broken():
+        raise TimeoutError
+
+    devices["cam"].update = broken
+    with pytest.raises(DeviceUnavailable, match="not reachable"):
+        await reg.live_pictures(cam)
+    assert not cam.picture_lock.locked() and not reg.lives.locked()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("camera", ["silent", "sending"])
+async def test_a_failed_lens_check_frees_the_camera_whatever_its_video_does(ffmpeg, monkeypatch, camera):
+    ffmpeg.mode("live")
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 50, silent=camera == "silent") as fake:
+        app_channel(fake, monkeypatch)
+        reg, devices = house(ffmpeg, camera_username="", camera_password="")
+        cam = reg.resolve_one("hallway-cam")
+
+        async def no_answer():
+            await asyncio.sleep(0.3)
+            raise TimeoutError
+
+        devices["cam"].update = no_answer
+        started = time.monotonic()
+        with pytest.raises(DeviceUnavailable, match="not reachable"):
+            await asyncio.wait_for(reg.live_pictures(cam), 15)
+        assert time.monotonic() - started < 3
+        assert not cam.picture_lock.locked() and not reg.lives.locked()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("video", ["rtsp", "app-silent", "app-sending"])
+@pytest.mark.parametrize("leave_after", [0.05, 0.2, 0.45])
+async def test_a_viewer_who_leaves_while_the_video_starts_frees_the_camera(ffmpeg, monkeypatch, leave_after, video):
+    """The web server cancels a request whose viewer has left, at every await from then on (anyio cancel scopes)."""
+    ffmpeg.mode("live")
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 50, silent=video == "app-silent") as fake:
+        if video == "rtsp":
+            reg, devices = house(ffmpeg)
+        else:
+            app_channel(fake, monkeypatch)
+            reg, devices = house(ffmpeg, camera_username="", camera_password="")
+        cam = reg.resolve_one("hallway-cam")
+
+        async def slow_answer():
+            await asyncio.sleep(0.3)
+
+        devices["cam"].update = slow_answer
+        with anyio.move_on_after(leave_after):
+            stream = await reg.live_pictures(cam)
+            await stream.aclose()
+        for _ in range(250):  # the camera is free once its video has closed
+            if not cam.picture_lock.locked() and not reg.lives.locked():
+                break
+            await asyncio.sleep(0.02)
+        assert not cam.picture_lock.locked() and not reg.lives.locked()
 
 
 # ---- over HTTP ----------------------------------------------------------------------------------------------------------

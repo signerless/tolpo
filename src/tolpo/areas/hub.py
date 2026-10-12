@@ -12,7 +12,7 @@ from pydantic import Field
 from .. import policy
 from ..calls import DeviceCaller
 from ..policy import Tier
-from ..registry import Registry, RegistryError
+from ..registry import Registry, RegistryError, model_of
 from ..views import clean
 
 METHODS = [
@@ -147,7 +147,7 @@ def _child(registry, device, kinds, models=None):
     entry = _entry(registry, device, kinds)
     if entry.root is None or entry.root.kind != "hub":
         raise RegistryError(f"{clean(entry.slug)} is not a hub child")
-    if models is not None and entry.device.model.split("(")[0] not in models:
+    if models is not None and model_of(entry).split("(")[0] not in models:
         raise RegistryError(f"{clean(entry.slug)} does not support this setting")
     return entry
 
@@ -180,7 +180,7 @@ def _smartcam(entry):
     # H200 and H500 use SMARTCAM. Prefer the actual connected device class.
     from kasa.smartcam import SmartCamDevice
 
-    return isinstance(entry.device, SmartCamDevice) or entry.device.model.split("(")[0] in {"H200", "H500"}
+    return isinstance(entry.device, SmartCamDevice) or model_of(entry).split("(")[0] in {"H200", "H500"}
 
 
 async def alarm_config(registry, caller, device: str) -> dict[str, Any]:

@@ -23,7 +23,7 @@ from kasa.smartcam import SmartCamDevice
 
 from . import policy
 from .calls import NeedsConfirmation
-from .registry import DeviceUnavailable, Entry, Forbidden, NotFound, RegistryError
+from .registry import DeviceUnavailable, Entry, Forbidden, NotFound, RegistryError, model_of
 from .views import clean
 
 
@@ -317,7 +317,7 @@ async def invoke(registry, adapter, entry, operation, **params):
 
 
 def device_view(entry):
-    out = {"id": clean(entry.slug), "kind": entry.kind, "model": clean(str(entry.device.model))}
+    out = {"id": clean(entry.slug), "kind": entry.kind, "model": clean(str(model_of(entry)))}
     if entry.device.alias:
         out["name"] = clean(str(entry.device.alias))
     return out

@@ -15,7 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Config, is_loopback, load_config
-from .registry import NotEnabled, Registry, RegistryError
+from .registry import NotEnabled, Registry, RegistryError, model_of
 from .snapshot import RAW_VIDEO_INPUT, GrabError, elementary_video, pump, scrub
 from .views import clean
 
@@ -44,7 +44,7 @@ async def _scan(cfg: Config) -> None:
         for entry in registry.entries():
             dev = entry.device
             where = f"  (via {entry.root.slug})" if entry.root else f"  {dev.host}"
-            print(f"{entry.slug:24} {dev.model:8} {entry.kind:9}{where}")
+            print(f"{entry.slug:24} {model_of(entry):8} {entry.kind:9}{where}")
         for host, problem in registry.problems.items():
             print(f"! {host}: {problem}", file=sys.stderr)
     finally:
