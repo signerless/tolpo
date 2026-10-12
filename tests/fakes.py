@@ -201,6 +201,12 @@ elif mode == "empty":
     pass
 elif mode == "hang":
     time.sleep(60)
+elif mode == "live":
+    # live video: a picture every 20 ms until it is stopped (and never longer than 8 s, so nothing is left behind)
+    for _ in range(400):
+        sys.stdout.buffer.write(JPEG)
+        sys.stdout.flush()
+        time.sleep(0.02)
 elif mode == "slow":
     with open(os.environ["FAKE_FFMPEG_TRACE"], "a") as trace:
         trace.write("start %f\\n" % time.time())

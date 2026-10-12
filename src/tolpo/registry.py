@@ -26,11 +26,14 @@ from kasa.exceptions import AuthenticationError, KasaException
 from . import compat, policy
 from .config import Config, local_subnets
 from .media import live_chunks
-from .snapshot import QUALITIES, GrabError, Picture, grab, rtsp_url
+from .snapshot import QUALITIES, GrabError, Picture, grab, live_jpegs, rtsp_url
 
 log = logging.getLogger(__name__)
 
 UPDATE_TIMEOUT = 20.0
+LIVE_STREAMS = 2  # cameras that may send live video at the same time
+LIVE_SECONDS = 900  # longest live view of a wired camera; the viewer can start a new one
+LIVE_BATTERY_SECONDS = 120  # a battery camera stays awake while it streams, so its live view is short
 SWEEP_MAX_HOSTS = 1024  # do not unicast-sweep anything larger than a /22
 BOOT_GRACE = 15.0  # at startup, stop waiting for slow devices after this long and let them finish in the background
 RETRY_DELAYS = (5.0, 15.0, 45.0)  # seconds between retries of hosts we know but could not reach
@@ -95,6 +98,47 @@ class BadRequest(RegistryError):
 
 class DeviceUnavailable(RegistryError):
     status_code = 502
+
+
+class Busy(RegistryError):
+    status_code = 409
+
+
+class LiveStream:
+    """The pictures of one live view. `aclose()` always gives the camera back, also when nobody read a single picture
+    (a plain generator would skip its cleanup then), and it may be called more than once."""
+
+    def __init__(self, first: bytes, frames: AsyncIterator[bytes], release: Callable[[], None], slug: str):
+        self._first, self._frames, self._release, self._slug = first, frames, release, slug
+        self._closed = False
+
+    def __aiter__(self) -> "LiveStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._closed:
+            raise StopAsyncIteration
+        if self._first is not None:
+            picture, self._first = self._first, None
+            return picture
+        try:
+            return await self._frames.__anext__()
+        except StopAsyncIteration:
+            await self.aclose()
+            raise
+        except GrabError as exc:
+            log.warning("live video from %s ended: %s", self._slug, exc.reason)
+            await self.aclose()
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._frames.aclose()
+        finally:
+            self._release()
 
 
 class Unsupported(RegistryError):
@@ -177,6 +221,7 @@ class Registry:
         self.ready = asyncio.Event()  # set once the first discovery has finished, successfully or not
         self._discovery_lock = asyncio.Lock()
         self.grabs = asyncio.Semaphore(2)  # ffmpeg decodes video; do not run a pile of them at once
+        self.lives = asyncio.Semaphore(LIVE_STREAMS)  # live video runs ffmpeg for minutes; keep the number small
         self._rejected: dict[str, float] = {}  # slug -> when the camera last refused our login for video
 
     # ---- lifecycle -------------------------------------------------------
@@ -817,6 +862,41 @@ class Registry:
         await self.check_picture(entry, quality)
         log.info("live view of %s (%s)", entry.slug, quality)
         return self._stream(entry, quality)
+
+    async def live_pictures(self, entry: Entry, quality: str = "low") -> AsyncIterator[bytes]:
+        """Live video from a camera the owner has enabled, as JPEG pictures one after the other, for a viewer on the
+        owner's own screen. The same checks as a picture. One stream per camera, LIVE_STREAMS cameras at once, and a
+        time limit that is shorter for a battery camera, because live video keeps it awake and empties its battery."""
+        await self.check_picture(entry, quality)
+        if self.lives.locked():
+            raise Busy(f"{LIVE_STREAMS} cameras are already sending live video; close one first")
+        try:
+            await asyncio.wait_for(entry.picture_lock.acquire(), 3)
+        except TimeoutError:
+            raise Busy(f"{entry.slug} is already sending video") from None
+        await self.lives.acquire()
+        battery = "battery_level" in entry.device.features
+        seconds = LIVE_BATTERY_SECONDS if battery else LIVE_SECONDS
+        url, feed, _ = self._stream(entry, quality)
+        try:
+            frames = live_jpegs(url, feed=feed, quality=quality, seconds=seconds, ffmpeg=self.cfg.ffmpeg or "ffmpeg")
+            first = await frames.__anext__()
+        except BaseException as exc:
+            self.lives.release()
+            entry.picture_lock.release()
+            if isinstance(exc, GrabError):
+                raise self.picture_failure(entry, exc) from None
+            if isinstance(exc, StopAsyncIteration):
+                raise DeviceUnavailable(f"no video from {entry.slug}") from None
+            raise
+        log.info("live video from %s (%s), at most %d s", entry.slug, quality, seconds)
+
+        def release() -> None:
+            self.lives.release()
+            entry.picture_lock.release()
+            log.info("live video from %s closed", entry.slug)
+
+        return LiveStream(first, frames, release, entry.slug)
 
     def health(self) -> dict[str, Any]:
         tops = [e for e in self._entries.values() if e.root is None]

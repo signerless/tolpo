@@ -32,6 +32,9 @@
     "src/tolpo/areas/*.py",
     "src/tolpo/automation/*.py",
     "src/tolpo/network/*.py",
+    "src/tolpo/web/home.html",
+    "src/tolpo/web/home.js",
+    "src/tolpo/web/home.css",
     "pyproject.toml",
     "README.md",
     "LICENSE"

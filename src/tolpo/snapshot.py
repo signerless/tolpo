@@ -56,17 +56,19 @@ def rtsp_url(host: str, username: str, password: str, quality: str) -> str:
 
 
 def command(
-    ffmpeg: str, source: str, input_args: Sequence[str] = RTSP_INPUT, max_width: int = MAX_WIDTH, *, frames: int = 1, fps: float | None = None
+    ffmpeg: str, source: str, input_args: Sequence[str] = RTSP_INPUT, max_width: int = MAX_WIDTH, *, frames: int | None = 1,
+    fps: float | None = None, quality: int = 5,
 ) -> list[str]:
     """No shell is involved and nothing in here comes from an agent: the source is built from a discovered address,
-    and `frames` and `fps` are numbers checked by the caller. With `fps`, frames are taken at that rate."""
+    and `frames` and `fps` are numbers checked by the caller. With `fps`, frames are taken at that rate. Without
+    `frames`, ffmpeg goes on until it is stopped."""
     scale = f"scale='min({max_width},iw)':-2"  # never enlarge; -2 keeps the height even
     return [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
         *input_args, "-i", source,
-        "-an", "-frames:v", str(int(frames)),
+        "-an", *(("-frames:v", str(int(frames))) if frames else ()),
         "-vf", f"fps={fps:.4f},{scale}" if fps else scale,
-        "-q:v", "5", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+        "-q:v", str(int(quality)), "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
     ]
 
 
@@ -363,3 +365,77 @@ async def grab_frames(
         raise _no_picture(returncode, detail, failure)
     now = time.time()
     return [Picture(p, w, h, now) for p, (w, h) in zip(pictures, sizes)]
+
+
+LIVE = {"low": (10.0, 960), "high": (6.0, 1280)}  # pictures per second and the widest picture, per quality
+LIVE_STALL = 15.0  # a stream that sends nothing for this long is over
+
+
+async def live_jpegs(
+    source: str | None = None,
+    *,
+    feed: AsyncIterator[bytes] | None = None,
+    quality: str = "low",
+    seconds: float,
+    ffmpeg: str = "ffmpeg",
+    input_args: Sequence[str] = RTSP_INPUT,
+    timeout: float = GRAB_TIMEOUT,
+) -> AsyncIterator[bytes]:
+    """JPEG pictures from live video, one after the other, until `seconds` have passed, the stream stalls, or the
+    caller stops reading. The first picture comes within `timeout` or a GrabError says why not. ffmpeg and the camera
+    connection are always closed when the generator ends, also when the caller closes it early."""
+    fps, width = LIVE[quality]
+    started = time.monotonic()
+    if feed is not None:
+        fmt, feed = await elementary_video(feed, timeout)
+        source, input_args = "pipe:0", (*RAW_VIDEO_INPUT, "-f", fmt)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *command(ffmpeg, source or "", input_args, width, frames=None, fps=fps, quality=6),
+            stdin=asyncio.subprocess.PIPE if feed is not None else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        if feed is not None:
+            await feed.aclose()
+        raise GrabError("missing", "ffmpeg is not installed on the machine that runs tolpo") from None
+    pumping = asyncio.create_task(pump(feed, proc.stdin)) if feed is not None else None
+    shown = 0
+    buffer = b""
+    try:
+        while time.monotonic() - started < seconds:
+            wait = timeout if not shown else LIVE_STALL
+            try:
+                chunk = await asyncio.wait_for(proc.stdout.read(65536), wait)
+            except TimeoutError:
+                if not shown:
+                    raise GrabError("timeout", f"the camera sent no video within {wait:.0f} seconds") from None
+                return
+            if not chunk:
+                break
+            buffer += chunk
+            while True:
+                begin = buffer.find(b"\xff\xd8")
+                if begin < 0:
+                    buffer = b""
+                    break
+                end = buffer.find(b"\xff\xd9", begin + 2)
+                if end < 0:
+                    buffer = buffer[begin:]
+                    break
+                picture, buffer = buffer[begin : end + 2], buffer[end + 2 :]
+                shown += 1
+                yield picture
+            if len(buffer) > MAX_BYTES:
+                raise GrabError("no_picture", "the camera's video did not turn into pictures")
+        if not shown:
+            failure = await _release(proc, pumping)
+            pumping = None
+            raise failure or GrabError("no_picture", "the camera connected but no usable picture came out of the stream")
+    finally:
+        await _release(proc, pumping)
+        if feed is not None:
+            with contextlib.suppress(Exception):
+                await feed.aclose()
+

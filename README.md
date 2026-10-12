@@ -265,7 +265,7 @@ what is on.
 On top of these, `home_overview`, `list_devices`, `get_device`, `set_power`, `set_light`, `set_feature`,
 `camera_snapshot` and `rescan` work for every device.
 
-All the areas together are 237 tools. Their names, descriptions and parameter lists come to about 40,000 tokens. The
+All the areas together are 241 tools. Their names, descriptions and parameter lists come to about 40,000 tokens. The
 standard setup switches on only the areas that match the devices found at home. A client that loads every tool at once
 can use `areas` to keep only what it needs.
 
@@ -299,6 +299,33 @@ curl -s -X POST localhost:8765/batch/light \
 A device is addressed by its short `id` (`office-1`), by its name in the Tapo app (case-insensitive),
 or, in the batch endpoints, by a glob such as `office*`. If a name matches several devices the server
 returns `409` with the candidates instead of guessing.
+
+### The house in 3D
+
+`tolpo serve` also serves a 3D view of the house at `http://127.0.0.1:8765/home`. It draws the rooms, puts every
+device in its room and shows its state: lights glow in their real color, a door or window drawn on the wall opens when
+its sensor reports open, a water leak turns red, the temperature floats over its sensor. Click a device to switch it,
+dim it or change its color. Click a camera to watch it live. Rooms without a device are left out.
+
+The floor plan is yours and stays on your machine, in `~/.config/tolpo/home.json` (`server.home_layout` or
+`TOLPO_HOME_LAYOUT` to move it). The easiest way to make one is to ask your agent to "build my home plan": with the
+`home_plan_draft`, `home_plan_get` and `home_plan_set` tools it drafts a plan from your devices, asks you about your
+rooms and saves it. You can also press `Edit layout` in the view, drag devices where they belong, and save. The format
+is in [docs/areas/home_plan.md](https://github.com/signerless/tolpo/blob/main/docs/areas/home_plan.md):
+
+```json
+{"version": 1,
+ "rooms": [{"id": "office", "name": "Office", "x": -7, "z": -5, "w": 5, "d": 5},
+           {"id": "garden", "name": "Garden", "x": -9, "z": -12, "w": 21, "d": 7, "outside": true}],
+ "devices": {"office-1": {"room": "office", "x": -5.75, "z": -3.75},
+             "garden-cam": {"room": "garden", "x": 1.5, "z": -5.6, "yaw": 0}}}
+```
+
+Live video comes from `GET /devices/{id}/live`, a stream of JPEG pictures (about 10 per second) from a camera you listed
+in `cameras.snapshots`. One stream per camera and two cameras at once. A view ends after 15 minutes, or after 2 minutes
+on a battery camera, because live video keeps it awake. The page loads three.js from one pinned jsDelivr path and may
+talk to this server only. It asks battery cameras for their state every five minutes, not every few seconds, so it does
+not wake them.
 
 ## Camera pictures
 

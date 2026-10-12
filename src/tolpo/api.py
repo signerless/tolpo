@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 import secrets
 from contextlib import asynccontextmanager
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, JsonValue
+from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
@@ -26,6 +31,23 @@ Reads are broad; writes are limited to power, brightness and color unless the ow
 widens `policy.allow_write`. Responses never include Matter or HomeKit setup codes or the Wi-Fi name.
 A still picture is available only from cameras the owner listed in `cameras.snapshots`.
 """
+
+
+WEB = Path(__file__).parent / "web"
+THREE = "https://cdn.jsdelivr.net/npm/three@0.170.0/"  # the one outside source the 3D page may load code from
+
+
+def page_headers(html: bytes) -> dict[str, str]:
+    """Headers for the 3D page. The browser may run its own script, three.js from one pinned path, and the import map
+    whose exact text is hashed here, and may talk to this server only."""
+    found = re.search(rb'<script type="importmap">(.*?)</script>', html, re.S)
+    allowed = f"'sha256-{base64.b64encode(hashlib.sha256(found.group(1)).digest()).decode()}'" if found else ""
+    policy = (
+        f"default-src 'none'; script-src 'self' {THREE} {allowed}; style-src 'self'; img-src 'self' blob: data:; "
+        "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    )
+    return {"Content-Security-Policy": policy, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Cache-Control": "no-cache"}
 
 
 class PowerBody(BaseModel):
@@ -136,6 +158,31 @@ def create_app(
             },
         )
 
+    @app.get(
+        "/devices/{ref}/live",
+        dependencies=auth,
+        response_class=StreamingResponse,
+        responses={200: {"content": {"multipart/x-mixed-replace": {}}, "description": "JPEG pictures, one after the other"}},
+        summary="Live video from a camera",
+    )
+    async def live(ref: str, quality: Literal["low", "high"] = "low"):
+        """Only cameras the owner enabled. A stream of JPEG pictures (`multipart/x-mixed-replace`, about 10 per second on
+        `low`, 6 on `high`) that an `<img>` or a fetch reader can show. One stream per camera, two cameras at once, and at
+        most 15 minutes, or 2 for a battery camera. Nothing is stored. Closing the connection stops the camera."""
+        frames = await reg.live_pictures(reg.resolve_one(ref), quality)
+
+        async def body():
+            try:
+                async for picture in frames:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(picture)).encode() + b"\r\n\r\n" + picture + b"\r\n"
+            finally:
+                await frames.aclose()
+
+        # The background task closes the stream even when the viewer leaves before the first picture went out.
+        return StreamingResponse(body(), media_type="multipart/x-mixed-replace; boundary=frame", background=BackgroundTask(frames.aclose),
+                                 headers={"Cache-Control": "no-store", "Cross-Origin-Resource-Policy": "same-origin",
+                                          "X-Content-Type-Options": "nosniff"})
+
     @app.post("/devices/{ref}/power", response_model=DeviceSummary, dependencies=auth, summary="Switch on or off")
     async def power(ref: str, body: PowerBody):
         entry = reg.resolve_one(ref)
@@ -173,6 +220,39 @@ def create_app(
     async def batch_light(body: BatchLight):
         settings = body.model_dump(exclude={"targets"})
         return await run_batch(reg, body.targets, lambda e: reg.set_light(e, **settings))
+
+    from . import home as plan
+
+    @app.get("/home", include_in_schema=False)
+    async def home_page():
+        html = (WEB / "home.html").read_bytes()
+        return Response(html, media_type="text/html; charset=utf-8", headers=page_headers(html))
+
+    @app.get("/home/home.js", include_in_schema=False)
+    async def home_script():
+        return Response((WEB / "home.js").read_bytes(), media_type="text/javascript; charset=utf-8",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+    @app.get("/home/home.css", include_in_schema=False)
+    async def home_style():
+        return Response((WEB / "home.css").read_bytes(), media_type="text/css; charset=utf-8",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+    @app.get("/home/layout", dependencies=auth, summary="The floor plan of the 3D home view")
+    async def get_plan():
+        """Rooms and where each device sits. Empty until the owner saves one; the page then places devices itself."""
+        try:
+            return plan.load(cfg.home_layout) or plan.empty()
+        except plan.LayoutError as exc:
+            raise HTTPException(422, f"the saved floor plan is not valid: {exc}") from None
+
+    @app.put("/home/layout", dependencies=auth, summary="Replace the floor plan of the 3D home view")
+    async def put_plan(body: Any = Body(...)):
+        """Checked before it is written. The file is the owner's own and is never sent anywhere else."""
+        try:
+            return plan.save(cfg.home_layout, body)
+        except plan.LayoutError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     from .areas import AreaContext, load
     from .calls import Caller

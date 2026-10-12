@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Home</title>
+<link rel="stylesheet" href="/home/home.css">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<script type="module" src="/home/home.js"></script>
+</head>
+<body>
+<div id="scene"></div>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-mark"></span><span>tolpo</span><span class="brand-sep"></span><span class="brand-home">Home</span></div>
+  <div id="summary" class="summary" aria-live="polite"></div>
+  <div class="topbar-actions">
+    <span id="status" class="status" role="status">Loading</span>
+    <button id="labels-toggle" class="btn ghost" type="button" aria-pressed="false">Labels</button>
+    <button id="edit" class="btn ghost" type="button" aria-pressed="false">Edit layout</button>
+    <button id="save" class="btn primary" type="button" hidden>Save layout</button>
+  </div>
+</header>
+
+<aside id="rooms" class="sidebar" aria-label="Rooms and devices">
+  <div class="sidebar-head">Rooms</div>
+  <div id="room-list"></div>
+</aside>
+
+<aside id="inspector" class="inspector" aria-live="polite" hidden></aside>
+
+<div id="viewer" class="viewer" hidden>
+  <div class="viewer-box" role="dialog" aria-modal="true" aria-labelledby="viewer-title">
+    <div class="viewer-head">
+      <strong id="viewer-title"></strong>
+      <span id="viewer-meta" class="muted"></span>
+      <button id="viewer-close" class="btn ghost" type="button">Close</button>
+    </div>
+    <div class="viewer-frame"><canvas id="viewer-canvas" aria-label="Live video"></canvas></div>
+  </div>
+</div>
+
+<div id="token" class="viewer" hidden>
+  <div class="token-box" role="dialog" aria-modal="true" aria-labelledby="token-title">
+    <strong id="token-title">Access token</strong>
+    <p class="muted">This server asks for the token set in TOLPO_TOKEN.</p>
+    <input id="token-input" type="password" autocomplete="off" aria-label="Token">
+    <label class="check"><input id="token-remember" type="checkbox"> Remember in this browser</label>
+    <button id="token-ok" class="btn primary" type="button">Continue</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
