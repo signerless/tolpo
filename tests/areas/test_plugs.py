@@ -23,13 +23,13 @@ def rule_cases():
         yield "plug_rules", {"kind": kind}, f"get_{name}_rules", {"start_index": 0}
         tool, args, body = {
             "countdown": ("plug_countdown_set", {"seconds": 60, "on": False},
-                          {"delay": 60, "enable": True, "desired_states": {"device_on": False}}),
+                          {"delay": 60, "enable": True, "desired_states": {"on": False}}),
             "schedule": ("plug_schedule_set", {"at": "09:15", "on": True, "days": [1, 3]},
-                         {"week_day": 10, "mode": 1, "s_min": 555, "s_type": 1, "e_type": 0,
-                          "enable": True, "desired_states": {"device_on": True}}),
+                         {"week_day": 10, "mode": "repeat", "s_min": 555, "s_type": "normal",
+                          "enable": True, "desired_states": {"on": True}}),
             "away": ("plug_away_set", {"start": "23:00", "end": "02:00", "days": [0, 6]},
-                     {"week_day": 65, "mode": 1, "start_min": 1380, "end_min": 120,
-                      "start_time_type": 1, "end_time_type": 1, "start_time_offset": 0,
+                     {"week_day": 65, "mode": "repeat", "start_min": 1380, "end_min": 120,
+                      "start_time_type": "normal", "end_time_type": "normal", "start_time_offset": 0,
                       "end_time_offset": 0, "frequency": 5, "enable": True}),
         }[kind]
         yield tool, args, f"add_{name}_rule", body
@@ -37,14 +37,14 @@ def rule_cases():
         yield "plug_rule_delete", {"kind": kind, "rule_id": "r1"}, f"remove_{name}_rules", {
             "remove_all": False, "rule_list": [{"id": "r1"}]}
         yield "plug_rule_enable", {"kind": kind, "rule_id": "r1", "enabled": False}, f"edit_{name}_rule", {
-            "id": "r1", "enable": False, "delay": 60, "desired_states": {"device_on": False}}
+            "id": "r1", "enable": False, "delay": 60, "desired_states": {"on": False}}
         if kind != "countdown":
             yield "plug_rule_enable", {"kind": kind, "enabled": True}, f"set_{name}_all_enable", {"enable": True}
 
 
 RULE_CASES = list(rule_cases())
 # Rule envelopes follow the P115 fixtures: only schedule replies carry start_index and sum.
-ONE_RULE = [{"id": "r1", "delay": 60, "enable": True, "desired_states": {"device_on": False}, "password": "secret"}]
+ONE_RULE = [{"id": "r1", "delay": 60, "enable": True, "desired_states": {"on": False}, "password": "secret"}]
 RULE_RESPONSES = {
     "get_countdown_rules": {"countdown_rule_max_count": 1, "enable": False, "rule_list": ONE_RULE},
     "get_antitheft_rules": {"antitheft_rule_max_count": 1, "enable": False, "rule_list": ONE_RULE},
@@ -184,12 +184,35 @@ async def test_bad_rule_inputs_never_reach_wire(make_house, fn, args):
     assert caller.sent == []
 
 
+async def test_a_countdown_to_switch_on_says_on_not_the_key_the_device_ignores(make_house):
+    """Checked on a P115: it stores "on": false for a rule that says "device_on": true, so a timer to switch ON would
+    have switched OFF."""
+    reg, caller, _ = make_house(tier=2)
+    await plugs.countdown(reg, caller, "desk-lamp", 3600, True)
+    assert caller.sent[-1][2]["desired_states"] == {"on": True}
+    await plugs.schedule(reg, caller, "desk-lamp", "08:00", True, [1])
+    assert caller.sent[-1][2]["desired_states"] == {"on": True}
+    assert "device_on" not in str(caller.sent)
+
+
+async def test_a_listed_rule_keeps_the_action_it_will_do(make_house):
+    """The real plug lists desired_states as {"on": ...}. Dropping it would hide what the rule does and would send a
+    rule without its action when it is re-enabled."""
+    raw = {"rule_list": [{"id": "C1", "enable": False, "delay": 3600, "remain": 3600, "desired_states": {"on": True}}],
+           "countdown_rule_max_count": 1}
+    reg, caller, _ = make_house(tier=2, responses={"get_countdown_rules": raw})
+    out = await plugs.read_rules(reg, caller, "desk-lamp", "countdown")
+    assert out["rule_list"][0]["desired_states"] == {"on": True}
+    await plugs.enable_rule(reg, caller, "desk-lamp", "countdown", False, "C1")
+    assert caller.sent[-1][2]["desired_states"] == {"on": True}
+
+
 async def test_one_off_schedule_and_paged_enable(make_house):
     reg, caller, _ = make_house(tier=2)
     when = date.today() + timedelta(days=30)
     await plugs.schedule(reg, caller, "desk-lamp", "00:00", False, [], when.isoformat())
-    assert caller.sent[-1][2] == {"week_day": 0, "mode": 0, "year": when.year, "month": when.month, "day": when.day,
-                                 "s_min": 0, "s_type": 1, "e_type": 0, "enable": True, "desired_states": {"device_on": False}}
+    assert caller.sent[-1][2] == {"week_day": 0, "mode": "once", "year": when.year, "month": when.month, "day": when.day,
+                                 "s_min": 0, "s_type": "normal", "enable": True, "desired_states": {"on": False}}
     caller.respond("get_schedule_rules", lambda e, p: {"schedule_rule_max_count": 32, "enable": True, "sum": 2,
                    "start_index": p["start_index"], "rule_list": [
         {"id": "r0" if p["start_index"] == 0 else "r1", "enable": True, "s_min": 60}]})
@@ -249,12 +272,12 @@ async def test_parent_with_children_is_never_a_target(make_house, parent_type):
 
 async def test_rule_output_hides_unknown_nested_values_and_flattens_text(make_house):
     raw = {"rule_list": [{"id": "r1\n\t", "enable": False, "remain": 0, "nickname": "secret",
-                     "desired_states": {"device_on": False, "ssid": "secret", "token": "secret"}}],
+                     "desired_states": {"on": False, "ssid": "secret", "token": "secret"}}],
            "countdown_rule_max_count": 0, "password": "secret", "mac": "secret", "conflict_id": "", "empty": None}
     reg, caller, _ = make_house(tier=0, responses={"get_countdown_rules": raw})
     assert await plugs.read_rules(reg, caller, "desk-lamp", "countdown") == {
         "device": "desk-lamp", "kind": "countdown", "rule_list": [{"id": "r1", "enable": False,
-        "remain": 0, "desired_states": {"device_on": False}}], "countdown_rule_max_count": 0}
+        "remain": 0, "desired_states": {"on": False}}], "countdown_rule_max_count": 0}
 
 
 async def test_default_formats_and_safety_refusals(make_house):
@@ -462,7 +485,7 @@ async def test_real_child_wrapper_uses_only_selected_socket(make_house):
     reg, _, _ = make_house(tier=2, extra=[strip])
     await plugs.countdown(reg, Caller(reg), "socket-two", 60, False)
     parent.query.assert_awaited_once_with({"control_child": {"device_id": "socket-2", "requestData": {
-        "method": "add_countdown_rule", "params": {"delay": 60, "enable": True, "desired_states": {"device_on": False}}}}}, 3)
+        "method": "add_countdown_rule", "params": {"delay": 60, "enable": True, "desired_states": {"on": False}}}}}, 3)
 
 
 async def test_catalog_covers_all_sent_methods_at_exact_levels(make_house):

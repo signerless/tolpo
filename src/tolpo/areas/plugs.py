@@ -34,6 +34,8 @@ RULE_FIELDS = frozenset({
     "s_min", "e_min", "s_type", "e_type", "s_action", "e_action", "week_day",
     "year", "month", "day", "mode", "time_offset", "start_min", "end_min",
     "start_time_type", "end_time_type", "start_time_offset", "end_time_offset", "frequency",
+    # the state a rule sets: a plug has "on", a dimmer or a bulb adds the rest
+    "on", "transition_period", "brightness", "color_temp", "hue", "saturation", "auto",
 })
 OUTPUT_FIELDS = RULE_FIELDS | {"rule_list", "start_index", "sum", "countdown_rule_max_count",
                               "schedule_rule_max_count", "antitheft_rule_max_count", "conflict_id"}
@@ -266,7 +268,7 @@ async def set_default_state(registry, caller, device, mode):
     elif mode == "toggle_states":
         raise ValueError("toggle needs a reported re_power_type capability")
     else:
-        # UNVERIFIED: custom state.on is the legacy bean shape; verify on a plug.
+        # Checked on a P115: the device accepts a custom state with "on" and reports always on this way.
         payload = {"type": "custom", "state": {"on": mode == "always_on"}}
     out = await write(registry, caller, device, "set_device_info", {"default_states": payload})
     out["default"] = mode
@@ -362,9 +364,8 @@ def calendar(days, on_date):
     mask = sum(1 << integer(day, 0, 6, "weekday") for day in days)
     if bool(days) == bool(on_date):
         raise ValueError("supply weekdays for a repeating rule or one YYYY-MM-DD date")
-    # UNVERIFIED: numeric mode/time enums need SMART fixtures (repeat=1, once=0;
-    # normal=1, none=0). Field names come from the audited rule beans.
-    out = {"week_day": mask, "mode": 1 if days else 0}
+    # Checked on a P115 and an L430C: the device takes these words in lower case. Numbers and upper case get PARAMS_ERROR.
+    out = {"week_day": mask, "mode": "repeat" if days else "once"}
     if on_date:
         if not isinstance(on_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", on_date):
             raise ValueError("date must be YYYY-MM-DD")
@@ -431,14 +432,15 @@ async def save_rule(registry, caller, device, kind, payload, identifier=None):
 
 
 async def countdown(registry, caller, device, seconds, on, enabled=True, identifier=None):
+    # Checked on a P115: the state key is "on". The device ignores "device_on" and stores "on": false.
     payload = {"delay": integer(seconds, 1, 86400, "seconds"), "enable": boolean(enabled),
-               "desired_states": {"device_on": boolean(on, "on")}}
+               "desired_states": {"on": boolean(on, "on")}}
     return await save_rule(registry, caller, device, "countdown", payload, identifier)
 
 
 async def schedule(registry, caller, device, at, on, days, on_date=None, enabled=True, identifier=None):
-    payload = {**calendar(days, on_date), "s_min": minute(at), "s_type": 1, "e_type": 0,
-               "enable": boolean(enabled), "desired_states": {"device_on": boolean(on, "on")}}
+    payload = {**calendar(days, on_date), "s_min": minute(at), "s_type": "normal",
+               "enable": boolean(enabled), "desired_states": {"on": boolean(on, "on")}}
     return await save_rule(registry, caller, device, "schedule", payload, identifier)
 
 
@@ -449,14 +451,14 @@ async def away(registry, caller, device, start, end, days, on_date=None, enabled
     # UNVERIFIED: frequency=5 is a conservative candidate; the app's allowed range
     # and unit are not established. No frequency knob is exposed to an agent.
     payload = {**calendar(days, on_date), "start_min": first, "end_min": last,
-               "start_time_type": 1, "end_time_type": 1, "start_time_offset": 0,
+               "start_time_type": "normal", "end_time_type": "normal", "start_time_offset": 0,
                "end_time_offset": 0, "frequency": 5, "enable": boolean(enabled)}
     return await save_rule(registry, caller, device, "away", payload, identifier)
 
 
 async def delete_rule(registry, caller, device, kind, identifier):
     name = rule_name(kind)
-    # UNVERIFIED: remove_all plus a rule_list of ids is the candidate remove shape. remove_all is always false.
+    # Checked on a P115 and an L430C: remove_all false plus a rule_list of ids deletes the rules.
     return await write(registry, caller, device, f"remove_{name}_rules",
                        {"remove_all": False, "rule_list": [{"id": rule_id(identifier)}]})
 
@@ -512,7 +514,7 @@ def tools(ctx):
                                  on: Annotated[bool, Field(description="Power state when the timer expires", strict=True)],
                                  enabled: Annotated[bool, Field(description="Whether the rule runs", strict=True)] = True,
                                  rule_id: Identifier = None) -> dict[str, Any]:
-        """Add or replace a countdown timer. Can energize a load while unattended. UNVERIFIED on SMART hardware."""
+        """Add or replace a countdown timer. Can energize a load while unattended. Checked on a P115."""
         return await run(countdown, device, seconds, on, enabled, rule_id)
 
     @ctx.tool(title="Plug schedule", tier=Tier.SETTING)
@@ -521,7 +523,7 @@ def tools(ctx):
                                 on_date: Annotated[str | None, Field(description="YYYY-MM-DD for a one-off rule")] = None,
                                 enabled: Annotated[bool, Field(description="Whether the rule runs", strict=True)] = True,
                                 rule_id: Identifier = None) -> dict[str, Any]:
-        """Add or replace a fixed-time schedule. Use weekdays or a date. UNVERIFIED numeric rule enums."""
+        """Add or replace a fixed-time schedule. Use weekdays or a date. Weekday rules are checked on a P115; dated ones are not."""
         return await run(schedule, device, at, on, days, on_date, enabled, rule_id)
 
     @ctx.tool(title="Plug Away Mode", tier=Tier.SETTING)
@@ -530,7 +532,7 @@ def tools(ctx):
                             on_date: Annotated[str | None, Field(description="YYYY-MM-DD for a one-off window")] = None,
                             enabled: Annotated[bool, Field(description="Whether the rule runs", strict=True)] = True,
                             rule_id: Identifier = None) -> dict[str, Any]:
-        """Add or replace an Away Mode window with random power changes. UNVERIFIED enums and frequency."""
+        """Add or replace an Away Mode window with random power changes. Checked on a P115; the frequency is a guess."""
         return await run(away, device, start, end, days, on_date, enabled, rule_id)
 
     @ctx.tool(title="Delete plug rule", tier=Tier.SETTING)

@@ -86,11 +86,11 @@ async def test_defaults_white_brightness_shape(make_house):
         "brightness": {"type": "custom", "value": 30}, "re_power_type": "always_on"}}
 
 
-SCHEDULE = {"enable": True, "mode": "REPEAT", "week_day": 62, "s_type": "NORMAL",
-            "s_min": 480, "e_type": "NONE", "e_min": 0, "desired_states": {"on": True, "brightness": 40}}
+SCHEDULE = {"enable": True, "mode": "repeat", "week_day": 62, "s_type": "normal",
+            "s_min": 480, "e_type": "none", "e_min": 0, "desired_states": {"on": True, "brightness": 40}}
 COUNTDOWN = {"enable": True, "delay": 300, "desired_states": {"on": False}}
-AWAY = {"enable": True, "mode": "REPEAT", "week_day": 127, "start_time_type": "NORMAL",
-        "end_time_type": "NORMAL", "start_min": 1200, "end_min": 60, "frequency": 10}
+AWAY = {"enable": True, "mode": "repeat", "week_day": 127, "start_time_type": "normal",
+        "end_time_type": "normal", "start_min": 1200, "end_min": 60, "frequency": 10}
 RULES = {"schedule": SCHEDULE, "countdown": COUNTDOWN, "antitheft": AWAY}
 
 
@@ -173,8 +173,8 @@ async def test_rule_validation_prevents_any_wire_call(make_house, kind, patch):
 
 async def test_rule_dates_solar_offsets_and_enable_pagination(make_house):
     reg, caller, _ = make_house(tier=2)
-    once = {**SCHEDULE, "mode": "ONCE", "week_day": 0, "year": 2024, "month": 2, "day": 29,
-            "s_type": "SUNSET", "time_offset": -30}
+    once = {**SCHEDULE, "mode": "once", "week_day": 0, "year": 2024, "month": 2, "day": 29,
+            "s_type": "sunset", "time_offset": -30}
     await lights.change_rule(reg, caller, "office-1", "schedule", once)
     assert caller.sent[-1][2] == once
     caller.respond("get_schedule_rules", lambda e, p: {"sum": 2, "rule_list": [
@@ -182,6 +182,57 @@ async def test_rule_dates_solar_offsets_and_enable_pagination(make_house):
     await lights.enable_rule(reg, caller, "office-1", "schedule", "r1", False)
     assert [p for _, m, p in caller.sent if m == "get_schedule_rules"] == [{"start_index": 0}, {"start_index": 1}]
     assert caller.sent[-1][2] == {**SCHEDULE, "id": "r1", "enable": False}
+
+
+async def test_rule_words_go_out_in_lower_case_whatever_the_caller_typed(make_house):
+    """Checked on an L430C and a P115: the device answers PARAMS_ERROR for upper case, so the device must get lower case."""
+    reg, caller, _ = make_house(tier=2)
+    shouted = {**SCHEDULE, "mode": "REPEAT", "s_type": "NORMAL", "e_type": "NONE"}
+    await lights.change_rule(reg, caller, "office-1", "schedule", shouted)
+    assert caller.sent[-1][2] == SCHEDULE
+    away = {**AWAY, "mode": "Repeat", "start_time_type": "NORMAL", "end_time_type": "Normal"}
+    await lights.change_rule(reg, caller, "office-1", "antitheft", away)
+    assert caller.sent[-1][2] == AWAY
+    sunny = {**SCHEDULE, "s_type": "SunRise", "time_offset": 15}
+    await lights.change_rule(reg, caller, "office-1", "schedule", sunny)
+    assert caller.sent[-1][2]["s_type"] == "sunrise"
+
+
+async def test_custom_default_state_is_completed_to_the_four_fields_the_device_wants(make_house):
+    """Checked on an L430C: a custom default with only brightness and color temperature gets UNSPECIFIC_ERROR."""
+    reg, caller, _ = make_house(tier=2, responses={"get_device_info": {"default_states": {
+        "re_power_type": "always_on", "type": "last_states",
+        "state": {"brightness": 80, "hue": 240, "saturation": 100, "color_temp": 2700}}}})
+    await lights.set_defaults(reg, caller, "office-1", {"type": "custom", "state": {"brightness": 60, "color_temp": 4000}})
+    assert caller.sent[-1][2] == {"default_states": {"re_power_type": "always_on", "type": "custom", "state": {
+        "brightness": 60, "color_temp": 4000, "hue": 0, "saturation": 0}}}
+    await lights.set_defaults(reg, caller, "office-1", {"type": "custom", "state": {"brightness": 60, "hue": 120, "saturation": 80}})
+    assert caller.sent[-1][2]["default_states"]["state"] == {"brightness": 60, "hue": 120, "saturation": 80, "color_temp": 0}
+    await lights.set_defaults(reg, caller, "office-1", {"type": "custom", "state": {"color_temp": 3000}})
+    assert caller.sent[-1][2]["default_states"]["state"] == {"color_temp": 3000, "hue": 0, "saturation": 0, "brightness": 80}
+    sent = len(caller.sent)
+    with pytest.raises(BadRequest, match="colour default needs hue"):
+        await lights.set_defaults(reg, caller, "office-1", {"type": "custom", "state": {"brightness": 60}})
+    assert not [m for _, m, _ in caller.sent[sent:] if m == "set_device_info"]
+
+
+# The rows below are what an L430C (firmware 1.0.9) lists for a disabled schedule and a disabled Away Mode rule.
+LISTED_SCHEDULE = {"enable": False, "id": "S1", "s_type": "normal", "s_min": 480, "e_type": "normal", "e_min": 0,
+                   "e_action": "none", "week_day": 62, "mode": "repeat", "year": 0, "month": 0, "day": 0, "time_offset": 0,
+                   "desired_states": {"on": True, "brightness": 40, "transition_period": 0, "auto": False, "hue": 0,
+                                      "saturation": 0, "color_temp": 0}}
+LISTED_AWAY = {"enable": False, "id": "A1", "start_time_type": "normal", "start_min": 1200, "end_time_type": "normal",
+               "end_min": 1320, "frequency": 10, "week_day": 127, "mode": "repeat", "year": 0, "month": 0, "day": 0,
+               "start_time_offset": 0, "end_time_offset": 0}
+
+
+@pytest.mark.parametrize("kind,row", [("schedule", LISTED_SCHEDULE), ("antitheft", LISTED_AWAY)])
+async def test_a_rule_can_be_re_enabled_exactly_as_the_bulb_lists_it(make_house, kind, row):
+    """A rule is re-sent as it was listed. The bulb lists "no end action" as e_action "none", which must be accepted."""
+    reg, caller, _ = make_house(tier=2, responses={f"get_{kind}_rules": {"rule_list": [row], "sum": 1}})
+    await lights.enable_rule(reg, caller, "office-1", kind, row["id"], True)
+    assert caller.sent[-1][1] == f"edit_{kind}_rule"
+    assert caller.sent[-1][2] == {**row, "enable": True}
 
 
 async def test_countdown_enable_omits_read_only_remaining(make_house):

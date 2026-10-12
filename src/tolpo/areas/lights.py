@@ -20,8 +20,8 @@ for _family in ("schedule", "countdown", "antitheft"):
     for _operation in ("add", "edit"):
         METHODS.append(policy.method(f"{_operation}_{_family}_rule", Tier.SETTING, ["light"],
                                      f"Change a lighting {_family} rule."))
-    # UNVERIFIED: remove_antitheft_rules is inferred from a misspelled app method string.
-    # UNVERIFIED: countdown/antitheft removal parameter shape follows the decoded schedule removal bean.
+    # Checked on an L430C: remove_schedule_rules, remove_countdown_rules and remove_antitheft_rules all take
+    # {"remove_all": false, "rule_list": [{"id": ...}]}.
     METHODS.append(policy.method(f"remove_{_family}_rules", Tier.SETTING, ["light"],
                                  f"Delete lighting {_family} rules."))
 # UNVERIFIED: get_auto_light_info and set_auto_light_info come from the app's AutoLightBean. No real device has
@@ -85,6 +85,13 @@ def choice(value, name, choices):
     if not isinstance(value, str) or value not in choices:
         raise BadRequest(f"{name} has an unsupported value")
     return value
+
+
+def word(value, name, choices):
+    """A word the device wants in lower case. The caller may use either case."""
+    if not isinstance(value, str) or value.lower() not in choices:
+        raise BadRequest(f"{name} has an unsupported value")
+    return value.lower()
 
 
 def fields(value, allowed, name):
@@ -209,7 +216,20 @@ async def set_defaults(registry, caller, ref, settings):
             current.pop("state", None)
     if current.get("type") == "custom" and not current.get("state"):
         raise BadRequest("a custom default requires a state")
-    # UNVERIFIED: real models must confirm set_device_info accepts this default_states object.
+    if current.get("type") == "custom" and ("type" in patch or "state" in patch):
+        # Checked on an L430C: the device answers UNSPECIFIC_ERROR unless the custom state carries all four fields.
+        # Only a state the caller supplied is completed. When just the outage behavior changes, the device gets back
+        # exactly what it reported.
+        state = dict(current["state"])
+        if state.get("color_temp", 0) > 0:
+            state.setdefault("hue", 0)
+            state.setdefault("saturation", 0)
+        elif "hue" not in state:
+            raise BadRequest("a colour default needs hue and saturation, or a color temperature")
+        state.setdefault("color_temp", 0)
+        state.setdefault("brightness", (raw.get("state") or {}).get("brightness", 100))
+        current["state"] = state
+    # Checked on an L430C: set_device_info accepts this default_states object (custom needs all four state fields).
     await write(registry, caller, entry, "set_device_info", {"default_states": current})
     return {"device": clean(entry.slug), "changed": {"default_states": compact(current)}}
 
@@ -243,12 +263,12 @@ def rule_object(kind, value, *, editing=False):
         if "action" not in out and "desired_states" not in out:
             raise BadRequest("countdown requires action or desired_states")
         return out
-    # UNVERIFIED: uppercase enum wire values are inferred from the app's enum beans.
-    # Confirm the serialization on a SMART bulb before using rules on real hardware.
-    choice(out.get("mode"), "mode", {"ONCE", "REPEAT"})
+    # Checked on an L430C bulb and a P115 plug: the device takes these words in lower case and answers PARAMS_ERROR for
+    # upper case or numbers. The caller may use either case; the device always gets lower case.
+    out["mode"] = word(out.get("mode"), "mode", {"once", "repeat"})
     # UNVERIFIED: the weekday bit order (bit 0 Sunday) has not been seen in a real rule.
     days = integer(out.get("week_day"), "week_day bit mask", 0, 127)
-    if out["mode"] == "REPEAT":
+    if out["mode"] == "repeat":
         if days == 0:
             raise BadRequest("a repeated rule requires at least one weekday")
         if any(out.get(k, 0) != 0 for k in ("year", "month", "day")):
@@ -269,9 +289,11 @@ def rule_object(kind, value, *, editing=False):
         if "desired_states" in out:
             out["desired_states"] = state_object(out["desired_states"])
             boolean(out["desired_states"].get("on"), "desired_states.on")
-        for key in ("s_action", "e_action"):
+        # The L430C lists a schedule without an end action as e_action "none", and a rule is re-sent as listed when it is
+        # enabled or disabled, so "none" must be accepted for the end.
+        for key, allowed in (("s_action", {"on", "off"}), ("e_action", {"on", "off", "none"})):
             if key in out:
-                choice(out[key], key, {"on", "off"})
+                choice(out[key], key, allowed)
         if "s_action" in out and "desired_states" in out:
             if out["s_action"] != ("on" if out["desired_states"]["on"] else "off"):
                 raise BadRequest("s_action and desired_states.on must agree")
@@ -286,9 +308,9 @@ def rule_object(kind, value, *, editing=False):
             if min_key in out or "e_action" in out:
                 raise BadRequest("end time requires e_type")
             continue
-        time_type = choice(out.get(type_key), type_key, {"NORMAL", "SUNRISE", "SUNSET", "NONE"} if optional
-                           else {"NORMAL", "SUNRISE", "SUNSET"})
-        if time_type == "NONE":
+        time_type = out[type_key] = word(out.get(type_key), type_key, {"normal", "sunrise", "sunset", "none"} if optional
+                                         else {"normal", "sunrise", "sunset"})
+        if time_type == "none":
             if min_key in out:
                 integer(out[min_key], min_key, 0, 0)
             if "e_action" in out:
@@ -297,9 +319,9 @@ def rule_object(kind, value, *, editing=False):
             integer(out.get(min_key), min_key, 0, 1439)
         if offset_key and offset_key in out:
             integer(out[offset_key], offset_key, -720, 720)
-            if time_type == "NORMAL" and out[offset_key] != 0:
+            if time_type == "normal" and out[offset_key] != 0:
                 raise BadRequest("normal times cannot have a solar offset")
-    if kind == "antitheft" and out["start_time_type"] == out["end_time_type"] == "NORMAL":
+    if kind == "antitheft" and out["start_time_type"] == out["end_time_type"] == "normal":
         if out["start_min"] == out["end_min"]:
             raise BadRequest("Away Mode needs a nonempty time window")
     return out

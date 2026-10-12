@@ -72,8 +72,9 @@ Empty rule lists are omitted. A reported zero `sum` remains in the output.
 Price reads preserve the nested seasonal configuration and 24 hourly slots per weekday/weekend array.
 No switch, dimmer or power-strip fixtures were available.
 The method names and field names come from the audit and the app's data beans.
-UNVERIFIED: SMART rule mode and time enum numbers, the Away Mode frequency value and unit,
-and rule write acceptance need device checks. Check a plug first, then each strip child and a switch.
+Checked on a P115 (and an L430C): the rule words go out in lower case, the state a rule sets is `desired_states.on`, and
+the removal object works. UNVERIFIED: dated (one-time) rules, the Away Mode frequency range and unit (5 was accepted), and
+rule writes on a strip child or a switch. Check those next.
 UNVERIFIED: legacy `default_states.state.on`, v2 `smart_status` with `re_power_type`, history timestamp boundaries,
 price scale and the cost-array period mapping need real plug checks. Verify each strip child separately.
 Check that clearing energy data removes history and totals only after the exact confirmation phrase is supplied.
@@ -83,8 +84,8 @@ sleep interval units, `wiring_status` key, double-click interval units and LED `
 Check these on a wall switch and dimmer. Check LED writes on the P115 and low-power writes on a supported switch.
 The supplied P115 fixtures cover reads only. Every write, Charge Guard read, history read and child routing
 still needs lead verification on hardware. The child wrapper itself is tested with a fake parent protocol.
-Confirm that add returns an id, edits retain the requested action, list paging advances,
-delete affects only that id, and enable changes the requested rule.
+Confirmed on a P115: add returns an id, a rule re-sent as listed keeps its action, and delete removes the rule. Still to
+confirm: list paging, and enabling a rule for real.
 Sunrise, sunset, paired start/end schedule actions and schedule runtime statistics are deferred.
 
 Each safety rule (levels, confirmations, unknown fields, text cleaning, numeric and boolean validation, times and weekday
@@ -94,5 +95,10 @@ purpose, and a test failed each time.
 Checked on a real P115 on 2026-10-12: the reads of rules, LED, default state and status; power off and on; a countdown
 rule (created disabled, with the action equal to the current state, listed, then deleted); the LED mode (changed and set
 back); and the power-on default (set to always on, which the device stores as type `custom` with `state.on` true, and set
-back to `last_states`). Schedules, Away Mode, the electricity price, energy clearing, auto-off, protections, location and
-the switch and dimmer tools were not tried on real devices.
+back to `last_states`). The rules were checked again later the same day, after a fault was fixed: a countdown, a weekday
+schedule and an Away Mode window were created disabled, listed, re-sent as listed and deleted, and the lists were as before.
+The first check had only looked at the countdown and not at what the plug stored. The plug ignores the key `device_on`
+and stored `on: false`, so a timer to switch on would have switched off. Schedules and Away Mode were also refused with
+PARAMS_ERROR because tolpo sent numbers for the mode and the time types. The tools now send `desired_states.on` and lower
+case words, and the output keeps the `on` of a listed rule. Not tried: the electricity price, energy clearing, auto-off,
+protections, location, dated rules, enabling a rule for real, and the switch and dimmer tools.

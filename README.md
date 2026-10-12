@@ -475,10 +475,11 @@ transports through `python-kasa`, plus a small patch (`compat.py`) for cameras w
 the C465, that `python-kasa` cannot reach on its own.
 
 The areas beyond the first release were built from analysis of the Tapo app and tested with simulated devices.
-Reading was tried on a real home with a hub, eight sensors, a doorbell, three cameras and a plug (the four bulbs were
-off at the time). A few reversible writes were tried there too: the plug, a camera light, the hub light, a microphone
-volume, a detection switch and an automation rule, each set back afterwards. Most writes have not been tried on real
-hardware, and the area pages say which. Robot vacuums, door locks, radiator valves and the firewall providers were never
+Reading was tried on a real home with four bulbs, a hub, eight sensors, a doorbell, three cameras and a plug. A few
+reversible writes were tried there too: the bulbs (power, brightness, color, power-on defaults, saved presets and
+disabled rules), the plug (power, countdown, LED, power-on default and disabled rules), a camera light, the hub light, a
+microphone volume, a detection switch and an automation rule, each set back afterwards. Most other writes have not been
+tried on real hardware, and the area pages say which. Robot vacuums, door locks, radiator valves and the firewall providers were never
 tried on the real thing.
 
 Known limits: cameras give still pictures, short runs of pictures and saved clips, but no continuous video to an

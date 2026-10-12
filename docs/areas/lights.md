@@ -30,25 +30,34 @@ A custom state accepts brightness 1 to 100, color temperature 1500 to 9000 kelvi
 hue 0 to 360 and saturation 0 to 100 together. White bulbs may use
 `brightness: {"type": "custom", "value": 30}` instead of `type` and `state`.
 
-UNVERIFIED: The default-state fields are decoded. The `set_device_info` write path needs confirmation
-on a real bulb, strip, and ceiling-light child. Sanitized L430C read fixtures arrived during this build
-and were matched in the fakes. All writes and strip/child operations were tested only with fakes.
-No device or network host was contacted by this implementation agent.
+Checked on four L430C bulbs (firmware 1.0.9): a custom default must carry all four state fields, brightness, color
+temperature, hue and saturation, or the bulb answers UNSPECIFIC_ERROR. When you give a custom state, tolpo fills in what
+is missing: hue and saturation 0 for a white default, color temperature 0 for a color default, and the brightness the
+bulb already stores. A color default without hue and saturation is refused before anything is sent. Setting `type` back
+to `last_states` makes the bulb report its last state again by itself. Still UNVERIFIED: the strip and ceiling-light
+child paths.
 
 ## On-device rules
 
 `kind` is `schedule`, `countdown`, or `antitheft` (Away Mode). All rule writes require level 2.
 Rules take a complete object, with `enable` as a boolean. Edit also requires `id`.
 Times are minutes after midnight, from 0 to 1439, in the device's local time zone.
-Use `mode: "REPEAT"` and a `week_day` mask from 1 to 127.
-UNVERIFIED: bit 0 is taken to be Sunday and bit 6 Saturday. No real rule has confirmed the order.
-For `mode: "ONCE"`, use `week_day: 0` and a valid `year`, `month`, and `day`.
+Use `mode: "repeat"` and a `week_day` mask from 1 to 127.
+UNVERIFIED: bit 0 is taken to be Sunday and bit 6 Saturday. A rule that fires on a given day has not been seen yet.
+For `mode: "once"`, use `week_day: 0` and a valid `year`, `month`, and `day`. A dated rule has not been tried on a bulb.
 
-Schedules use `s_type` (`NORMAL`, `SUNRISE`, or `SUNSET`), `s_min`, and `desired_states`
-with `on` plus the light-state fields above. The older `s_action: "on"` or `"off"` is also accepted.
-Optional `e_type`, `e_min`, and `e_action` describe an end action. `e_type: "NONE"` means no end action.
+The device takes these words in lower case and answers PARAMS_ERROR for upper case or for numbers. You may type them in
+either case: tolpo always sends lower case.
+
+Schedules use `s_type` (`normal`, `sunrise`, or `sunset`), `s_min`, and `desired_states`
+with `on` plus the light-state fields above. The older `s_action: "on"` or `"off"` is still accepted by tolpo, but one
+request that used it without `desired_states` was refused by the bulb, so use `desired_states`.
+Optional `e_type`, `e_min`, and `e_action` describe an end action. `e_type: "none"` means no end action. The bulb lists a
+rule without an end action as `e_type: "normal"`, `e_min: 0` and `e_action: "none"`, and tolpo accepts that form back when
+it re-sends a rule to enable or disable it. A rule with an end action did not keep it on the L430C, which listed
+`e_min: 0` and `e_action: "none"` anyway.
 `time_offset` is a solar offset in minutes, from -720 to 720. A normal time has zero offset.
-Example: `{"enable":true,"mode":"REPEAT","week_day":62,"s_type":"NORMAL","s_min":480,
+Example: `{"enable":true,"mode":"repeat","week_day":62,"s_type":"normal","s_min":480,
 "desired_states":{"on":true,"brightness":40}}`.
 
 Countdown rules use `delay` in seconds, from 1 to 86400, plus `desired_states` with `on`,
@@ -57,10 +66,10 @@ Away rules use `start_min`, `end_min`, `start_time_type`, `end_time_type`, and `
 from 1 to 1440. Overnight windows are accepted. Solar times accept `start_time_offset` and
 `end_time_offset`. The frequency bound is a conservative local validation bound, not a reported device limit.
 
-UNVERIFIED: The exact wire serialization of schedule and Away Mode enums needs a real fixture.
-Uppercase values follow the decoded enum beans. Check those values and weekday ordering on a SMART bulb.
-UNVERIFIED: `remove_antitheft_rules` is inferred from a misspelled app string.
-Countdown and Away Mode removal use the decoded schedule removal object. Confirm both on-device.
+Checked on the four L430C bulbs: adding returns the rule id, the list shows the rule as stored, and
+`remove_schedule_rules`, `remove_countdown_rules` and `remove_antitheft_rules` all take
+`{"remove_all": false, "rule_list": [{"id": ...}]}`. Rules were only created disabled. Still UNVERIFIED: the weekday order,
+dated rules, solar times, and a rule that actually fires.
 No method name for Auto Biorhythm is guessed or exposed.
 
 ## Python-kasa controls
@@ -120,14 +129,36 @@ pairing, Wi-Fi changes, firmware, and key material are outside this area.
 ## Validation and integration
 
 The area tests cover all 19 tools and all 19 declared methods through fakes.
-L430C read shapes match the sanitized fixtures. Every write needs a later hardware check.
-Check default-state writes and preset saves on a bulb, rule enums and removal on a SMART light,
-effects and painting boundaries on a strip, and child defaults, rules, and presets on a ceiling light.
+L430C read shapes match the sanitized fixtures and the answers of the real bulbs. Still to check on hardware: effects and
+painting boundaries on a strip, and child defaults, rules, and presets on a ceiling light.
 Check Auto-White on a model that supports its methods. The L430C reports the read method as unknown.
 
 Each safety rule (method levels, feature permissions, input validation, unknown fields, identifiers, weekday masks,
 calendar dates, hidden values, text cleaning, child targeting, preserved defaults and presets, refusals, refresh failures)
 was broken on purpose, and a test failed each time. There are no level 3 or 4 methods in this area.
 
-Nothing in this area was tried on a real light. The four L430C bulbs did not answer during the live check on 2026-10-12
-(they were probably off at the wall).
+## What was checked on real devices
+
+On 2026-10-12, on the four L430C bulbs (firmware 1.0.9), one bulb at a time, each change set back and read back:
+
+- Reads: state, power-on default, schedule, countdown and Away Mode lists, next event, fade features, saved presets, the
+  segment effect and the diagnostics. The four bulbs answered the same.
+- Power, brightness, color temperature, a color (hue and saturation, with and without brightness in one call), on every
+  bulb. Restoring a color needs the stored color written first and the white temperature after it, because the bulb keeps
+  its stored color while it is white.
+- The fade on and off times (`smooth_transition_on` and `_off`, changed from 1 to 2 and back). They need
+  `allow_write`. A fade on change is refused because this bulb has no such feature.
+- The saved preset 6, changed and put back. The whole list was the same afterwards.
+- The power-outage behavior (`always_on` to `last_states` and back) and a custom power-on default (see above), restored
+  exactly.
+- A countdown, a schedule and an Away Mode rule, created disabled, listed, re-sent as listed and deleted. Typed in upper
+  case on purpose: the bulb stored lower case.
+- The `light_preset` choice of `set_feature`, then the state put back.
+- A room of two bulbs switched off and on through `room_set_power`.
+- Refused, as they should be, without touching the bulb: effects, strip length, the LED, Auto-White and custom effects,
+  because this bulb has none of them. At level 1 the default, rule and preset writes are refused.
+
+The first run found three faults. The schedule and Away Mode rules were refused with PARAMS_ERROR because tolpo sent upper
+case words, a custom power-on default was refused because tolpo sent two of the four state fields, and a rule listed with
+`e_action: "none"` could not be re-sent. All three are fixed and have tests built from the bulb's real answers. Not tried:
+switching a rule on for real, a rule that fires, a dated rule, and every strip and ceiling-light path.
