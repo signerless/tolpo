@@ -141,6 +141,8 @@ button, input { font: inherit; color: inherit; }
 }
 .pin-label .value { color: #cbd5e1; margin-left: 6px; font-variant-numeric: tabular-nums; }
 .pin:hover .pin-label, .pin.selected .pin-label, .labels.all .pin-label, .pin.keep .pin-label { opacity: 1; }
+/* A label that shows on its own stays above the other pins, which are otherwise stacked by distance. */
+.labels > div:has(> .pin.keep), .labels > div:has(> .pin.selected), .labels > div:has(> .pin:hover) { z-index: 100000 !important; }
 .room-tag {
   pointer-events: none; font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: #334155;
   background: rgba(255, 255, 255, 0.78); padding: 4px 9px; border-radius: 999px; border: 1px solid rgba(15, 23, 42, 0.08);
