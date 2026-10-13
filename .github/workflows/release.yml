@@ -23,6 +23,11 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - name: The tag must match the versions in the repo
         run: python3 scripts/check_release.py "$GITHUB_REF_NAME"
+      - name: Install ffmpeg, which the camera picture tests use
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
       - name: Run the Python tests
         run: |
           uv venv --python 3.13 .venv
