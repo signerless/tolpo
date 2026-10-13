@@ -28,6 +28,7 @@ Refer to a device by its short `id` (for example `office-1`) or by its name. `se
 - `set_feature`: any other feature, only if the owner's policy allows it.
 - `rescan`: look for new or moved devices.
 - `tolpo_areas`: the parts of tolpo (areas) that are on, what each offers and the level the owner allows. Call it before you guess a tool name.
+- `recorded_history`: how often a door or window sensor opened and for how long, from what `tolpo record` saved on the person's machine. The hub keeps no such history, so if nothing was recorded, tell the person to run `tolpo record <sensor>`, best as a background service. Never estimate the times listed in `not_recorded`.
 - `home_plan_draft`, `home_plan_get`, `home_plan_set`, `home_view_url`: the floor plan of the 3D view of the house that `tolpo serve` shows at `/home`. When the person asks you to build their home plan, draft it, ask about their real rooms and where each device is, save it, and give them the address.
 
 Most other tools belong to an area, such as lights, plugs, hub, doorbell, cameras, vacuum, automation, pairing or network. Each area has a page that lists its tools: [docs/areas](https://github.com/signerless/tolpo/blob/main/docs/areas/README.md) describes how they work, and the pages sit next to it.

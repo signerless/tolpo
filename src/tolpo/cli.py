@@ -10,6 +10,7 @@ import collections
 import logging
 import os
 import shutil
+import signal
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -186,6 +187,44 @@ def _automation(action: str) -> int:
     return 0
 
 
+async def _record(cfg: Config, devices: list[str], every: float) -> int:
+    """Run until stopped (Ctrl+C, or the service manager). The hub keeps no such history, so this is the only record."""
+    from .recorder import contact_sensors, record
+
+    if every < 2:
+        print("--every must be at least 2 seconds", file=sys.stderr)
+        return 2
+    registry = Registry(cfg)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    try:
+        await registry.discover()
+        wanted = devices or contact_sensors(registry)
+        for _ in range(60):  # sensors behind a hub appear once the hub has answered
+            try:
+                for name in wanted:
+                    registry.resolve_one(name)
+                break
+            except RegistryError:
+                if stop.is_set():
+                    return 1
+                await asyncio.sleep(1)
+                wanted = devices or contact_sensors(registry)
+        if not wanted:
+            print("no door or window sensor was found", file=sys.stderr)
+            return 1
+        print(f"recording {', '.join(wanted)} every {every:g} s into {cfg.history_file}", flush=True)
+        await record(registry, wanted, cfg.history_file, every=every, stop=stop)
+        return 0
+    except RegistryError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        await registry.stop()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="tolpo", description=__doc__)
     parser.add_argument("--config", help="path to config.toml")
@@ -203,6 +242,9 @@ def main(argv: list[str] | None = None) -> None:
     watch.add_argument("camera", help="camera id or name")
     watch.add_argument("--quality", choices=("low", "high"), default="low")
     watch.add_argument("--seconds", type=int, help="close the window after this many seconds")
+    rec = sub.add_parser("record", help="save every opening and closing of door and window sensors, with its time, in a file on this machine")
+    rec.add_argument("devices", nargs="*", help="sensor ids or names (default: every door and window sensor)")
+    rec.add_argument("--every", type=float, default=5.0, help="seconds between readings (default: 5, at least 2)")
     auto = sub.add_parser("automation", help="show, stop or resume the automation rules (no Tapo account needed)")
     auto.add_argument("action", choices=("status", "kill", "resume"))
     args = parser.parse_args(argv)
@@ -223,6 +265,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(asyncio.run(_watch(cfg, args.camera, args.quality, args.seconds)))
     if args.command == "snapshot":
         sys.exit(asyncio.run(_snapshot(cfg, args.camera, args.output, args.quality)))
+    if args.command == "record":
+        sys.exit(asyncio.run(_record(cfg, args.devices, args.every)))
     if args.command == "mcp":
         from .mcp_server import run
 

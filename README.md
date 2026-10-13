@@ -260,12 +260,14 @@ what is on.
 | [device_admin](https://github.com/signerless/tolpo/blob/main/docs/areas/device_admin.md) | Names, clock, LED, firmware, and tolpo's own rooms and groups | 24 |
 | [automation](https://github.com/signerless/tolpo/blob/main/docs/areas/automation.md) | A local rule engine in place of Smart Actions: triggers, conditions, actions and an alert outbox | 10 |
 | [pairing](https://github.com/signerless/tolpo/blob/main/docs/areas/pairing.md) | Pair and remove hub devices, join Wi-Fi, reboot and factory reset. Most of it is level 4, a reboot is level 2 | 9 |
+| [home_plan](https://github.com/signerless/tolpo/blob/main/docs/areas/home_plan.md) | The floor plan of the 3D view: draft it from your devices, read it, save it, and where to see it | 4 |
+| [history](https://github.com/signerless/tolpo/blob/main/docs/areas/history.md) | How often a door or window opened and for how long, from what `tolpo record` saved | 1 |
 | [network](https://github.com/signerless/tolpo/blob/main/docs/areas/network.md) | What each device talks to, seen through your router, DNS server or firewall, and optional blocking. Blocking needs level 4, `mode = "enforce"` in `network.toml` and a Linux host that routes the traffic | 10 |
 
 On top of these, `home_overview`, `list_devices`, `get_device`, `set_power`, `set_light`, `set_feature`,
 `camera_snapshot` and `rescan` work for every device.
 
-All the areas together are 241 tools. Their names, descriptions and parameter lists come to about 40,000 tokens. The
+All the areas together are 242 tools. Their names, descriptions and parameter lists come to about 40,000 tokens. The
 standard setup switches on only the areas that match the devices found at home. A client that loads every tool at once
 can use `areas` to keep only what it needs.
 
@@ -326,6 +328,23 @@ in `cameras.snapshots`. One stream per camera and two cameras at once. A view en
 on a battery camera, because live video keeps it awake. The page loads three.js from one pinned jsDelivr path and may
 talk to this server only. It asks battery cameras for their state every five minutes, not every few seconds, so it does
 not wake them.
+
+### Door and window history
+
+A Tapo hub keeps no history of its own for sensors connected to TP-Link's cloud: asked the way the app asks, an H200
+answers with an empty list for a door sensor, and the app reads that history from the cloud instead. So tolpo records
+its own:
+
+```sh
+tolpo record garage
+```
+
+It reads the sensor every 5 seconds (`--every` to change it) and saves each opening and closing, with its time, in
+`~/.local/share/tolpo/history.jsonl` (`server.history_file` or `TOLPO_HISTORY_FILE`), a file only you can read. Leave
+out the name to record every door and window sensor. It records only while it runs, so run it as a background service
+for a history without holes; times when the computer slept or the sensor was out of reach are written down as gaps.
+The `recorded_history` tool then tells an agent how often a door opened, for how long, per day and per hour, and
+lists the times nothing was recorded instead of guessing about them.
 
 ## Camera pictures
 

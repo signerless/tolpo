@@ -42,6 +42,7 @@ class Config:
     allow_methods: frozenset[str] = frozenset()  # single device methods allowed above `tier`
     areas: tuple[str, ...] = ()  # which area modules offer tools; empty means all of them
     home_layout: str = "~/.config/tolpo/home.json"  # the owner's floor plan for the 3D view at /home; never shipped
+    history_file: str = "~/.local/share/tolpo/history.jsonl"  # what `tolpo record` saw door and window sensors do
 
 
 def _warn_if_shared(path: Path) -> None:
@@ -73,7 +74,8 @@ def load_config(path: str | None = None) -> Config:
     Environment: TAPO_EMAIL, TAPO_PASSWORD, TOLPO_TOKEN, TOLPO_HOST,
     TOLPO_PORT, TOLPO_CONFIG, TOLPO_CREDENTIALS_FILE, TOLPO_CAMERA_USERNAME,
     TOLPO_CAMERA_PASSWORD, TOLPO_SNAPSHOTS (camera names separated by commas), TOLPO_FFMPEG, TOLPO_TIER, TOLPO_AREAS (area names separated by commas),
-    TOLPO_HOME_LAYOUT (the floor plan file of the 3D view at /home).
+    TOLPO_HOME_LAYOUT (the floor plan file of the 3D view at /home), TOLPO_HISTORY_FILE (where `tolpo record` saves
+    what door and window sensors do).
     """
     cfg_path = Path(path or os.environ.get("TOLPO_CONFIG") or DEFAULT_CONFIG_PATH).expanduser()
     raw: dict = {}
@@ -121,6 +123,7 @@ def load_config(path: str | None = None) -> Config:
         allow_methods=frozenset(policy.get("allow_methods", ())),
         areas=_names(os.environ["TOLPO_AREAS"].split(",") if "TOLPO_AREAS" in os.environ else server.get("areas", ())),
         home_layout=os.environ.get("TOLPO_HOME_LAYOUT", server.get("home_layout", "~/.config/tolpo/home.json")),
+        history_file=os.environ.get("TOLPO_HISTORY_FILE", server.get("history_file", "~/.local/share/tolpo/history.jsonl")),
     )
 
 
