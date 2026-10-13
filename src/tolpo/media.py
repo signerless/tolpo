@@ -332,6 +332,11 @@ class MediaSession:
         log.debug("video channel of %s: first answer %s, challenge fields %s", host, status, sorted(re.findall(r"(\w+)=", challenge)))
         if status != 401 or not challenge.lower().startswith("digest"):
             raise GrabError("failed", f"the camera's video port answered {status} instead of asking for a login")
+        # A hub (seen on an H200) sends a short text with its challenge and closes the connection; a camera does
+        # neither. The login then goes on a new connection, and the hub accepts the challenge from the first one.
+        await self._skip_body(headers)
+        if headers.get("connection", "").lower() == "close":
+            await self._reconnect()
 
         hashed = hashed_password(self._password, challenge)
         self._writer.write((request + f"Authorization: {digest_header(challenge, hashed)}\r\n\r\n").encode())
@@ -353,6 +358,25 @@ class MediaSession:
         self._decrypt = Decryptor(who, nonce, hashed)
         if m := re.search(r"boundary=([^;\s]+)", headers.get("content-type", "")):
             self._boundary = m.group(1).encode()
+
+    async def _skip_body(self, headers: dict[str, str]) -> None:
+        size = headers.get("content-length", "")
+        if not size.isdigit() or int(size) == 0:
+            return
+        if int(size) > MAX_HEADER:
+            raise GrabError("failed", "the camera's video port sent an oversized answer to the login")
+        try:
+            await asyncio.wait_for(self._reader.readexactly(int(size)), self.timeout)
+        except (TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+            if headers.get("connection", "").lower() != "close":
+                raise GrabError("unreachable", "the camera's video port stopped answering") from None
+
+    async def _reconnect(self) -> None:
+        self._drop()
+        try:
+            self._reader, self._writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), self.timeout)
+        except (TimeoutError, OSError):
+            raise GrabError("unreachable", "the camera did not answer on the network") from None
 
     # ---- what we send --------------------------------------------------------------------------
 
@@ -452,14 +476,19 @@ class MediaSession:
 
 async def live_chunks(
     host: str, password: str, quality: str = "low", *, port: int = MEDIA_PORT, timeout: float = CONNECT_TIMEOUT,
-    psk_port: int = PSK_PORT,
+    psk_port: int = PSK_PORT, child: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Yield decrypted MPEG-TS from the camera's live preview until the caller stops. Closes the connection when
-    the generator is closed, after asking the camera to stop. Logs in exactly once."""
+    the generator is closed, after asking the camera to stop. Logs in exactly once. With `child`, `host` is a hub and
+    the video is that of the device behind it with this id, which is how the app asks a hub (checked with a D230
+    doorbell behind an H200)."""
     session = MediaSession(host, password, port=port, psk_port=psk_port, timeout=timeout)
     await session.open()
     try:
-        await session.request({"preview": {"audio": ["disable"], "channels": [0], "resolutions": [RESOLUTIONS[quality]]}, "method": "get"})
+        preview: dict[str, Any] = {"audio": ["disable"], "channels": [0], "resolutions": [RESOLUTIONS[quality]]}
+        if child:
+            preview["deviceId"] = child
+        await session.request({"preview": preview, "method": "get"})
         async for item in session.events():
             if isinstance(item, Notice):
                 if item.event == "stream_finish":

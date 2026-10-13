@@ -22,12 +22,16 @@ class FakeCamera:
     def __init__(self, password: str, chunks: list[bytes], *, encrypt_type: str = "3", exchange_user: str = "admin",
                  send_key_exchange: bool = True, extra_parts: list[tuple[str, bytes]] = (), part_size: int | None = None,
                  answer: bytes | None = None, silent: bool = False, stream_password: str | None = None, lie_from: int = 0,
-                 hang_up: bool = False, script=None, notices: list[dict] = ()):
+                 hang_up: bool = False, script=None, notices: list[dict] = (), hub_login: bool = False):
         self.chunks, self.extra_parts, self.part_size = chunks, list(extra_parts), part_size
         self.encrypt_type, self.exchange_user, self.send_key_exchange = encrypt_type, exchange_user, send_key_exchange
         self.lie_from = lie_from  # index of the first video part whose size is misreported
         self.answer, self.silent = answer, silent  # a fixed reply instead of the real conversation; or no reply at all
         self.hang_up = hang_up  # close the connection right after the fixed reply
+        # like an H200 hub: the challenge comes with a short text and the connection closes; the login follows on a new
+        # connection and is checked against that earlier challenge
+        self.hub_login = hub_login
+        self._issued: tuple[str, str] | None = None
         # script(camera, request, send) replaces the live stream after the login; send(mime, body, encrypted=..., headers=...)
         self.script = script
         self.notices = list(notices)  # notifications sent after the response, before the video
@@ -77,10 +81,19 @@ class FakeCamera:
             head = (await reader.readuntil(b"\r\n\r\n")).decode()
             self.heads.append(head)
             if "authorization:" not in head.lower():
+                if self.hub_login:
+                    self._issued = (nonce, opaque)
+                    body = b"Unauthorized!\n"
+                    writer.write(f"HTTP/1.1 401 Unauthorized\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\n"
+                                 f"Connection: close\r\nWWW-Authenticate: {challenge}\r\n\r\n".encode() + body)
+                    await writer.drain()
+                    return
                 writer.write(f"HTTP/1.0 401 Unauthorized\r\nWWW-Authenticate: {challenge}\r\nContent-Length: 0\r\n\r\n".encode())
                 await writer.drain()
                 head = (await reader.readuntil(b"\r\n\r\n")).decode()
                 self.heads.append(head)
+            elif self.hub_login and self._issued:
+                nonce, opaque = self._issued
             if not self._login_ok(head, nonce, opaque):
                 self.failed_logins += 1
                 writer.write(b"HTTP/1.0 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")

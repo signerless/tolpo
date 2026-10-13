@@ -66,7 +66,7 @@ what python-kasa documents as supported but we have not tried.
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/motion.svg" width="36" alt="Motion sensor"> | Motion sensors |  | T100 | Motion, as python-kasa documents it. Not checked on real hardware |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/leak.svg" width="36" alt="Water leak sensor"> | Water leak sensors | T300 |  | Leak alert and battery level |
 | <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/camera.svg" width="36" alt="Camera"> | Cameras | C225, C610, C465 | C100, C101, C110, C200, C210, C220, C325WB, C460, C520WS, C720, TC40, TC65, TC70 | State, battery where there is one, last alert and detection switches. With a higher level: detection tuning, image and audio settings, pan and tilt, the memory card. Pictures and clips, for the cameras you enable |
-| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery. With a higher level: ring sounds, quick replies, anti-theft, wake-up |
+| <img src="https://raw.githubusercontent.com/signerless/tolpo/main/assets/devices/doorbell.svg" width="36" alt="Video doorbell"> | Doorbells | D230 | D100C, D130 | State and battery, pictures and live video through the hub. With a higher level: ring sounds, quick replies, anti-theft, wake-up |
 |  | Robot vacuums |  | Models python-kasa has a cleaning module for | Status, start and stop, rooms and zones, suction and water, schedules. Built from the app's protocol and not tried on real hardware |
 |  | Door locks |  | Not supported by python-kasa | Not usable yet. The DL100, DL105, DL110, DL130 and DLW10 speak a protocol python-kasa does not know. tolpo can parse their discovery record, and nothing is connected to it yet |
 
@@ -305,7 +305,7 @@ returns `409` with the candidates instead of guessing.
 `tolpo serve` also serves a 3D view of the house at `http://127.0.0.1:8765/home`. It draws the rooms, puts every
 device in its room and shows its state: lights glow in their real color, a door or window drawn on the wall opens when
 its sensor reports open, a water leak turns red, the temperature floats over its sensor. Click a device to switch it,
-dim it or change its color. Click a camera to watch it live. Rooms without a device are left out.
+dim it or change its color. Click a camera or the doorbell to watch it live. Rooms without a device are left out.
 
 The floor plan is yours and stays on your machine, in `~/.config/tolpo/home.json` (`server.home_layout` or
 `TOLPO_HOME_LAYOUT` to move it). The easiest way to make one is to ask your agent to "build my home plan": with the
@@ -367,7 +367,8 @@ What to know before you turn it on:
 - A picture is one frame from now, not a recording. Battery cameras can be asleep and may not answer.
 - With RTSP, ffmpeg receives the camera account on its command line, so other users on the same machine can see
   it for a moment.
-- The doorbell sits behind the hub and has no stream of its own, so it gives no picture.
+- A doorbell behind the hub has no address of its own. Its pictures and live video come through the hub, like the
+  app's, and the first picture takes about 5 s while a battery doorbell wakes up. Its recordings are not reachable yet.
 
 The `camera_media` area builds on this. It can read the memory card and its recording index, return the thumbnail
 of a past event, take a short run of pictures from the live stream, and save a recording to the one folder you set
@@ -510,7 +511,7 @@ tried on real hardware, and the area pages say which. Robot vacuums, door locks,
 tried on the real thing.
 
 Known limits: cameras give still pictures, short runs of pictures and saved clips, but no continuous video to an
-agent, and the doorbell gives none; the cloud-only parts of the app (account, homes, sharing, push notifications,
+agent, and a doorbell behind the hub gives pictures but not its recordings; the cloud-only parts of the app (account, homes, sharing, push notifications,
 Tapo Care, voice assistants) are not reachable, and the automation area replaces some of them locally; the MCP
 server runs over stdio, one process per client, with no shared HTTP transport yet; the HTTP API has the original
 routes plus a few for the camera memory card (`/devices/{id}/storage`, `/recordings/...`) and the door lock state, and

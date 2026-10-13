@@ -12,6 +12,7 @@ from kasa import DeviceType
 from mcp import Client
 
 from tolpo import cli, media
+from tolpo.areas import camera_media
 from tolpo.config import Config
 from tolpo.mcp_server import build_server
 from tolpo.registry import BadRequest, DeviceUnavailable, Forbidden, NotEnabled, Registry, Unsupported
@@ -42,10 +43,17 @@ def house(fake, *, extra=(), **overrides):
     return reg, fakes.populate(reg, extra)
 
 
-def app_channel(camera, monkeypatch):
-    """Point the app's video channel at a fake camera on this machine instead of the camera's address."""
+def app_channel(camera, monkeypatch, asked=None):
+    """Point the app's video channel at a fake camera on this machine instead of the camera's address. `asked` collects
+    the address and the child id each stream was meant for."""
     real = media.live_chunks
-    monkeypatch.setattr("tolpo.registry.live_chunks", lambda host, password, quality: real("127.0.0.1", password, quality, port=camera.port))
+
+    def fake(host, password, quality, **kw):
+        if asked is not None:
+            asked.append((host, kw.get("child")))
+        return real("127.0.0.1", password, quality, port=camera.port, **kw)
+
+    monkeypatch.setattr("tolpo.registry.live_chunks", fake)
 
 
 def text(result):
@@ -99,16 +107,37 @@ async def test_only_cameras_can_give_pictures(ffmpeg):
 
 
 @pytest.mark.anyio
-async def test_a_camera_behind_the_hub_has_no_stream_of_its_own(ffmpeg):
-    bell = fakes.FakeDevice("bell-1", "Front Doorbell", "D230", DeviceType.Doorbell, features=[fakes.FakeFeature("state", fakes.T.Switch, fakes.C.Primary, True)])
-    second_hub = fakes.FakeDevice("hub-2", "Second Hub", "H200", DeviceType.Hub, children=[bell])
-    reg, _ = house(ffmpeg, extra=[second_hub], snapshots=("Front Doorbell",))
-    entry = reg.resolve_one("front-doorbell")
-    assert entry.root is not None
-    with pytest.raises(BadRequest) as caught:
-        await reg.snapshot(entry)
-    assert "hub" in str(caught.value) and ffmpeg.calls() == []
-    assert "snapshot" not in reg.capabilities(entry)
+@pytest.mark.parametrize("camera_account", [False, True])
+async def test_a_doorbell_behind_the_hub_sends_its_video_through_the_hub(ffmpeg, monkeypatch, camera_account):
+    # Checked on a real D230 behind an H200: the hub sends the doorbell's video when the request names the doorbell.
+    bell = fakes.FakeDevice("bell-1", "Front Doorbell", "D230", DeviceType.Doorbell, host="192.0.2.50",
+                            features=[fakes.FakeFeature("state", fakes.T.Switch, fakes.C.Primary, True)])
+    second_hub = fakes.FakeDevice("hub-2", "Second Hub", "H200", DeviceType.Hub, children=[bell], host="192.0.2.50")
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 3, hub_login=True) as hub:
+        asked = []
+        app_channel(hub, monkeypatch, asked)
+        account = {} if camera_account else {"camera_username": "", "camera_password": ""}
+        reg, _ = house(ffmpeg, extra=[second_hub], snapshots=("Front Doorbell",), **account)
+        entry = reg.resolve_one("front-doorbell")
+        picture = await reg.snapshot(entry)
+        assert "snapshot" in reg.capabilities(entry)
+        with pytest.raises(BadRequest, match="recordings"):
+            await camera_media._video_allowed(reg, entry)
+    assert picture.data == fakes.TINY_JPEG
+    assert asked == [("192.0.2.50", "bell-1")]  # the hub's address and the doorbell's id
+    assert hub.requests[0]["params"]["preview"]["deviceId"] == "bell-1"
+    assert (hub.logins, hub.failed_logins) == (1, 0)  # the login that followed the closed connection was accepted
+    assert ffmpeg.urls() == ["pipe:0"]  # never RTSP, which cannot reach a device behind a hub
+
+
+@pytest.mark.anyio
+async def test_a_camera_without_a_hub_still_asks_for_its_own_video(ffmpeg, monkeypatch):
+    async with FakeCamera(TAPO_PASSWORD, [STREAM] * 3) as camera:
+        asked = []
+        app_channel(camera, monkeypatch, asked)
+        reg, _ = house(ffmpeg, camera_username="", camera_password="")
+        await reg.snapshot(reg.resolve_one("hallway-cam"))
+    assert asked == [("192.0.2.10", None)] and "deviceId" not in camera.requests[0]["params"]["preview"]
 
 
 @pytest.mark.anyio

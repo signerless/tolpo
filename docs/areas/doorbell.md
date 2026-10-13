@@ -1,6 +1,8 @@
 # Doorbells and chimes
 
 These tools use the owner's authenticated local connection. Writes stay deny by default.
+Pictures and live video of a doorbell behind the hub come through the hub, from `camera_snapshot` and the live view of
+the 3D page, once the owner lists the doorbell by name with the cameras (`[cameras] snapshots`).
 Level 2 changes settings. Level 3 controls audible output, an electrical chime or the anti-theft alarm and requires the exact method and device
 id confirmation phrase on every call. Every successful write refreshes device state.
 

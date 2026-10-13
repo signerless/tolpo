@@ -410,6 +410,8 @@ def media_address(entry: Entry) -> tuple[str, int]:
 
 async def _video_allowed(registry: Registry, entry: Entry) -> None:
     """The same checks as a live picture: listed by the owner, a camera of its own, privacy off, not just rejected."""
+    if entry.root is not None:
+        raise BadRequest(f"{entry.slug} is reached through a hub: its live view and pictures work, its recordings not yet")
     await registry.check_picture(entry, "low")
 
 

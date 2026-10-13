@@ -683,7 +683,7 @@ class Registry:
 
     def pictures_enabled(self, entry: Entry) -> bool:
         """Whether the owner has enabled pictures for this camera, by listing its name."""
-        return entry.root is None and policy.can_snapshot(entry.kind, entry.device.alias, self.cfg.snapshots)
+        return (entry.root is None or entry.root.kind == "hub") and policy.can_snapshot(entry.kind, entry.device.alias, self.cfg.snapshots)
 
     def readings(self, entry: Entry) -> tuple[dict[str, Any], dict[str, str]]:
         values, units = {}, {}
@@ -821,8 +821,8 @@ class Registry:
             raise BadRequest(f"{entry.slug} is a {entry.kind}, not a camera")
         if not policy.can_snapshot(entry.kind, entry.device.alias, self.cfg.snapshots):
             raise NotEnabled(f"pictures cannot be taken with {entry.slug}: the owner's policy blocks it")
-        if entry.root is not None:
-            raise BadRequest(f"{entry.slug} is reached through the hub and has no video stream of its own")
+        if entry.root is not None and entry.root.kind != "hub":
+            raise BadRequest(f"{entry.slug} is reached through {entry.root.slug}, which cannot send its video")
         if (waited := time.monotonic() - self._rejected.get(entry.slug, float("-inf"))) < LOGIN_COOLDOWN:
             raise DeviceUnavailable(
                 f"{entry.slug} refused the login for video a moment ago; not trying again for {LOGIN_COOLDOWN - waited:.0f} seconds"
@@ -840,6 +840,10 @@ class Registry:
     def _stream(self, entry: Entry, quality: str) -> tuple[str | None, AsyncIterator[bytes] | None, str]:
         """Where the video comes from: an RTSP address with a camera account, or the app's channel without one,
         which needs only the Tapo account tolpo already has. The third value is the secret to scrub from output."""
+        if entry.root is not None:
+            # A camera or doorbell behind a hub has no address of its own: the hub sends its video on the app's
+            # channel when asked by the device's id. RTSP cannot reach it.
+            return None, live_chunks(entry.root.device.host, self.cfg.password, quality, child=entry.device.device_id), self.cfg.password
         if self.cfg.camera_username and self.cfg.camera_password:
             url = rtsp_url(entry.device.host, self.cfg.camera_username, self.cfg.camera_password, quality)
             return url, None, self.cfg.camera_password

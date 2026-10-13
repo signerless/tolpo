@@ -110,6 +110,14 @@ client can also:
   notification that names the last part received. A camera that is not acknowledged stalls.
 - End a session politely with a stop request before it hangs up.
 
+**A camera behind a hub.** A doorbell such as the D230 joins the H200 hub instead of the network, so it has no address
+of its own. The hub listens on port 8800 as well and speaks the same channel, with two differences we checked on our
+own H200 and D230. The hub's 401 carries a short text and closes the connection, so the login goes on a new
+connection, and the hub accepts it with the challenge from the first one. The preview request then names the device
+behind the hub by its device id, in a `deviceId` field, which is also how the app's streaming code asks a hub for one
+of its devices. The hub answers with that device's video. A battery doorbell needs a few seconds to wake up: about 5 s
+to the first picture here.
+
 Two variations exist that tolpo detects and names but does not support. Some cameras reject the account password on
 port 8800 because they are in a mode where the app uses a token handed out by the cloud. Some answer on port 28800
 instead, with TLS and a pre-shared key. Both need secrets that do not come from the owner's own account.

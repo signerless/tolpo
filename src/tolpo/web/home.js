@@ -1073,14 +1073,21 @@ function stopLive() {
 
 async function drawFrame(session, bytes) {
   const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+  let reshaped = false;
   for (const canvas of session.canvases) {
     if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
+      // A doorbell sends 4:3 pictures, most cameras 16:9: the frame in the inspector takes the shape of the picture.
+      if (canvas.classList.contains("cam-canvas")) {
+        canvas.parentElement.style.aspectRatio = `${bitmap.width} / ${bitmap.height}`;
+        reshaped = true;
+      }
     }
     canvas.getContext("2d").drawImage(bitmap, 0, 0);
   }
   bitmap.close();
+  if (reshaped) fitView();
   if (!session.frames++) {
     session.ui.wait.hidden = true;
     session.ui.badge.hidden = false;
