@@ -517,7 +517,7 @@ only ever signs in with your own Tapo account.
 
 ## Compatibility and status
 
-This is a development version after 0.1. Lights, plugs, hubs and sensors are supported over the KLAP and SSL-AES
+This is version 0.2.1. Lights, plugs, hubs and sensors are supported over the KLAP and SSL-AES
 transports through `python-kasa`, plus a small patch (`compat.py`) for cameras with an ECDSA certificate, such as
 the C465, that `python-kasa` cannot reach on its own.
 
