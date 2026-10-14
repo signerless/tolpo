@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from .. import media, policy, snapshot
 from ..policy import Tier
-from ..registry import BadRequest, DeviceUnavailable, Entry, NotEnabled, Registry
+from ..registry import BadRequest, DeviceUnavailable, Entry, Forbidden, NotEnabled, Registry
 from ..snapshot import GrabError
 from ..views import clean
 from .common import CAMERA_KINDS
@@ -425,7 +425,7 @@ async def thumbnail(registry: Registry, entry: Entry, start_time: str | None, fi
     host, port = media_address(entry)
     password = registry.cfg.password
     ffmpeg = registry.cfg.ffmpeg or "ffmpeg"
-    async with entry.picture_lock:
+    async with registry.camera(entry):
         try:
             if file_id is not None:
                 # UNVERIFIED: the request shape. The recordings of the owner's cameras carry no file id, so none was tried.
@@ -446,7 +446,7 @@ async def live_frames(registry: Registry, entry: Entry, count: int, seconds: flo
     if not 2 <= count <= snapshot.MAX_FRAMES or not 1 <= seconds <= snapshot.MAX_SPAN:
         raise BadRequest(f"frames must be 2 to {snapshot.MAX_FRAMES} and seconds 1 to {snapshot.MAX_SPAN:.0f}")
     url, feed, secret = await registry.live_view(entry, quality)
-    async with entry.picture_lock, registry.grabs:
+    async with registry.camera(entry), registry.grabs:
         try:
             return await snapshot.grab_frames(
                 url, feed=feed, count=count, seconds=seconds, ffmpeg=registry.cfg.ffmpeg or "ffmpeg",
@@ -512,7 +512,11 @@ async def recording_at(registry: Registry, caller: Any, entry: Entry, start: int
 
 async def download_clip(registry: Registry, entry: Entry, start_time: str, seconds: int, caller: Any) -> dict[str, Any]:
     """Copy the whole recording that holds `start_time`. The camera only gives out a recording from its exact start to its
-    exact end (checked on a C465: any other window gets no video), so `seconds` is the longest recording accepted."""
+    exact end (checked on a C465: any other window gets no video), so `seconds` is the longest recording accepted.
+    It writes files on the owner's disk, so it is a level 1 action, checked here and not only in the tool's label:
+    automation rules call this too."""
+    if registry.cfg.tier < Tier.CONTROL:
+        raise Forbidden("Copying a recording to a file is a level 1 action and the owner's policy blocks it.")
     if not 1 <= seconds <= CLIP_MAX_SECONDS:
         raise BadRequest(f"seconds must be 1 to {CLIP_MAX_SECONDS}")
     start = _when(start_time, "start_time")
@@ -530,7 +534,7 @@ async def download_clip(registry: Registry, entry: Entry, start_time: str, secon
     # Checked on a C465: channels, a client id, the media type (0 is video) and the exact start and end, times as text.
     client = media.client_id()  # the playback that opens the card and the download that follows use the same one
     request = {"download": {"channels": [0], "client_id": client, "media_type": 0, "start_time": str(first), "end_time": str(last)}}
-    async with entry.picture_lock:
+    async with registry.camera(entry):
         partial, sink = _open_partial(folder, base)  # only a file this call created is ever removed below
         try:
             await media.open_playback(host, registry.cfg.password, first, port=port, client=client)  # without one the camera sends no video
@@ -744,4 +748,5 @@ def routes(ctx):
     @ctx.route("/devices/{ref}/thumbnail", response_class=Response)
     async def thumbnail_route(ref: str, start_time: str | None = None, file_id: str | None = None):
         picture = await thumbnail(reg, reg.resolve_one(ref), start_time, file_id)
-        return Response(content=picture.data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return Response(content=picture.data, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store", "Cross-Origin-Resource-Policy": "same-origin", "X-Content-Type-Options": "nosniff"})

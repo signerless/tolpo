@@ -960,3 +960,16 @@ async def test_sequences_and_copies_respect_the_privacy_mode(make_house, monkeyp
             else:
                 await camera_media.download_clip(reg, entry, "1760000000", 10, caller)
     assert camera.heads == [] and list(clips.iterdir()) == [] and not frames_ffmpeg[1].exists()
+
+
+@pytest.mark.anyio
+async def test_level_zero_copies_no_recording_to_disk(make_house, monkeypatch, tmp_path):
+    # The tool's label says level 1, but a label is not a check: the copy itself refuses, also for an automation rule.
+    folder = tmp_path / "clips"
+    folder.mkdir()
+    monkeypatch.setenv(camera_media.CLIP_DIR_ENV, str(folder))
+    reg, caller, _ = make_house(tier=0, snapshots=("hallway-cam",))
+    recording(caller)
+    with pytest.raises(Forbidden, match="level 1"):
+        await camera_media.download_clip(reg, reg.resolve_one("hallway-cam"), "1760000000", 10, caller)
+    assert list(folder.iterdir()) == []

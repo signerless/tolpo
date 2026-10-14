@@ -1,3 +1,5 @@
+import pytest
+
 from tolpo.api import create_app
 from tolpo.config import Config
 from tolpo.registry import Registry
@@ -157,3 +159,25 @@ def test_a_device_whose_library_cannot_read_its_model_does_not_break_the_list(bu
     assert listed.status_code == 200
     assert {d["id"]: d["model"] for d in listed.json()}["hallway-cam"] == "C225"
     assert client.get("/devices/hallway-cam").json()["model"] == "C225"
+
+
+@pytest.mark.parametrize("headers", [
+    {"Sec-Fetch-Site": "cross-site"},
+    {"Sec-Fetch-Site": "same-site"},  # another port on this machine is another web site too
+    {"Origin": "http://evil.example"},
+    {"Origin": "null"},
+])
+def test_a_web_page_on_another_site_cannot_switch_a_device(build, headers):
+    # A page the owner opens can send a simple POST to 127.0.0.1 without asking this server first.
+    client, devices = build()
+    before = devices["lamp"].features["state"].value
+    res = client.post("/devices/desk-lamp/toggle", headers=headers)
+    assert res.status_code == 403 and "other web sites" in res.json()["error"]
+    assert devices["lamp"].features["state"].value == before
+
+
+def test_the_page_itself_and_programs_still_get_through(build):
+    client, devices = build()
+    assert client.get("/devices", headers={"Sec-Fetch-Site": "same-origin", "Origin": "http://testserver"}).status_code == 200
+    assert client.get("/home/layout", headers={"Sec-Fetch-Site": "none"}).status_code == 200  # an address typed in
+    assert client.post("/devices/desk-lamp/toggle").status_code == 200  # curl, an agent's HTTP client

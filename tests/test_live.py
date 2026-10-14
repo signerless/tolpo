@@ -239,3 +239,40 @@ def test_the_endpoint_says_no_like_the_picture_endpoint(build, ffmpeg):
     client, _ = build(token="s3cret", ffmpeg=ffmpeg.path, **SETTINGS)
     assert client.get("/devices/hallway-cam/live").status_code == 401
     assert ffmpeg.calls() == []
+
+
+@pytest.mark.anyio
+async def test_a_picture_of_a_busy_camera_says_so_instead_of_waiting(ffmpeg, monkeypatch):
+    monkeypatch.setattr(registry, "CAMERA_WAIT", 0.2)
+    reg, _ = house(ffmpeg)
+    cam = reg.resolve_one("hallway-cam")
+    await cam.picture_lock.acquire()  # busy with a clip or a live view
+    started = time.monotonic()
+    with pytest.raises(Busy, match="busy"):
+        await reg.snapshot(cam)
+    assert time.monotonic() - started < 2
+    cam.picture_lock.release()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("leaves", [False, True])
+async def test_live_video_of_a_busy_camera_gives_its_slot_back(ffmpeg, monkeypatch, leaves):
+    monkeypatch.setattr(registry, "CAMERA_WAIT", 0.3)
+    reg, _ = house(ffmpeg)
+    cam = reg.resolve_one("hallway-cam")
+    await cam.picture_lock.acquire()
+    if leaves:  # the viewer leaves while the request waits for the camera
+        with anyio.move_on_after(0.1):
+            await reg.live_pictures(cam)
+    else:
+        with pytest.raises(Busy):
+            await reg.live_pictures(cam)
+    cam.picture_lock.release()
+    assert reg.lives._value == registry.LIVE_STREAMS and not cam.picture_lock.locked()
+
+
+def test_a_web_page_on_another_site_cannot_wake_a_camera(build, ffmpeg):
+    ffmpeg.mode("live")
+    client, _ = build(ffmpeg=ffmpeg.path, **SETTINGS)
+    res = client.get("/devices/hallway-cam/live", headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "image"})
+    assert res.status_code == 403 and ffmpeg.calls() == []

@@ -74,6 +74,36 @@ class BatchLight(LightBody):
     targets: list[str] = Field(min_length=1, examples=[["office*"]])
 
 
+class SameOriginOnly:
+    """Refuse requests that a web page on another site makes to this server. Browsers say where a request comes from
+    (Sec-Fetch-Site, Origin); programs such as curl or an MCP client send neither, so they are let through. Without
+    this, any page the owner opens could switch a plug with a simple POST, which needs no permission from this server,
+    or wake a camera with an <img> pointed at its live view."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self._foreign(scope):
+            body = b'{"error":"requests from other web sites are refused"}'
+            await send({"type": "http.response.start", "status": 403,
+                        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    def _foreign(scope) -> bool:
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope["headers"]}
+        if headers.get("sec-fetch-site", "").lower() in ("cross-site", "same-site"):
+            return True
+        origin = headers.get("origin")
+        if origin is None:
+            return False
+        scheme = "https" if scope.get("scheme") == "https" else "http"
+        return origin.lower() != f"{scheme}://{headers.get('host', '').lower()}"
+
+
 def create_app(
     cfg: Config,
     registry: Registry | None = None,
@@ -91,6 +121,7 @@ def create_app(
         await reg.stop()
 
     app = FastAPI(title="tolpo", version=__version__, description=DESCRIPTION, lifespan=lifespan)
+    app.add_middleware(SameOriginOnly)
 
     if not cfg.token:
         # Without a token the only protection is the loopback bind, so also refuse requests

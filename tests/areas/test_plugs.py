@@ -11,7 +11,7 @@ from kasa.exceptions import DeviceError
 from tolpo.areas import plugs
 from tolpo.calls import Caller
 from tolpo.policy import Tier
-from tolpo.registry import DeviceUnavailable, Forbidden, RegistryError
+from tolpo.registry import BadRequest, DeviceUnavailable, Forbidden, RegistryError
 
 from .. import fakes
 
@@ -179,7 +179,7 @@ async def test_rule_tools_level_and_device_errors(make_house, mcp, tool, args, m
 ])
 async def test_bad_rule_inputs_never_reach_wire(make_house, fn, args):
     reg, caller, _ = make_house(tier=4)
-    with pytest.raises(ValueError):
+    with pytest.raises(BadRequest):
         await fn(reg, caller, "desk-lamp", *args)
     assert caller.sent == []
 
@@ -286,12 +286,12 @@ async def test_default_formats_and_safety_refusals(make_house):
         out = await plugs.set_default_state(reg, caller, "desk-lamp", mode)
         assert out["default"] == mode
     for mode in ("toggle_states", "bad"):
-        with pytest.raises(ValueError):
+        with pytest.raises(BadRequest):
             await plugs.set_default_state(reg, caller, "desk-lamp", mode)
     caller.respond("get_device_info", {"default_states": {"type": "smart_status", "re_power_type_capability": ["toggle_states", "always_off"]}})
     await plugs.set_default_state(reg, caller, "desk-lamp", "toggle_states")
     assert caller.sent[-1][2] == {"default_states": {"type": "smart_status", "re_power_type": "toggle_states"}}
-    with pytest.raises(ValueError, match="not supported"):
+    with pytest.raises(BadRequest, match="not supported"):
         await plugs.set_default_state(reg, caller, "desk-lamp", "always_on")
     caller.respond("get_device_info", {})
     with pytest.raises(RegistryError, match="did not report"):
@@ -320,7 +320,7 @@ async def test_default_and_energy_outputs_are_compact_and_allowlisted(make_house
 ])
 async def test_invalid_history_never_reaches_wire(make_house, args):
     reg, caller, _ = make_house()
-    with pytest.raises(ValueError):
+    with pytest.raises(BadRequest):
         await plugs.energy_history(reg, caller, "desk-lamp", *args)
     assert not caller.sent
 
@@ -328,7 +328,7 @@ async def test_invalid_history_never_reaches_wire(make_house, args):
 @pytest.mark.parametrize("price", [-1, True, 1.5, 2147483648])
 async def test_invalid_price_never_reaches_wire(make_house, price):
     reg, caller, _ = make_house(tier=2)
-    with pytest.raises(ValueError):
+    with pytest.raises(BadRequest):
         await plugs.set_price(reg, caller, "desk-lamp", price)
     assert not caller.sent
 
@@ -375,7 +375,7 @@ async def test_history_oversized_or_invalid_response_is_reported(make_house):
 ])
 async def test_bad_setting_inputs_never_reach_wire(make_house, fn, args):
     reg, caller, _ = make_house(tier=4, extra=[wall_switch()])
-    with pytest.raises(ValueError):
+    with pytest.raises(BadRequest):
         await fn(reg, caller, "wall-switch", *args)
     assert not caller.sent
 
@@ -547,3 +547,13 @@ async def test_plug_settings_sections_cover_every_read(make_house, mcp):
         bad = await client.call_tool("plug_settings", {"device": "desk-lamp", "section": "state"})
     assert bad.is_error and caller.sent == []
     assert set(plugs.PLUG_READS) | {"default_state"} == set(plugs.PlugSection.__args__)
+
+
+@pytest.mark.anyio
+async def test_an_agent_is_told_why_a_plug_setting_was_refused(make_house, mcp):
+    # Seen in review: these refusals used to reach the agent as a crash with no reason.
+    reg, caller, _ = make_house(tier=2)
+    async with mcp(reg, caller) as client:
+        res = await client.call_tool("plug_led_set", {"device": "desk-lamp", "mode": "always", "start": "22:00"})
+    text = " ".join(c.text for c in res.content if c.type == "text")
+    assert res.is_error and "start and end only apply to night_mode" in text

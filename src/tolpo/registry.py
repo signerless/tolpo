@@ -34,6 +34,7 @@ UPDATE_TIMEOUT = 20.0
 LIVE_STREAMS = 2  # cameras that may send live video at the same time
 LIVE_SECONDS = 900  # longest live view of a wired camera; the viewer can start a new one
 LIVE_BATTERY_SECONDS = 120  # a battery camera stays awake while it streams, so its live view is short
+CAMERA_WAIT = 3.0  # how long a picture or video waits for a camera that is busy with another before saying so
 STOP_GRACE = 10.0  # how long a live view that did not start may take to close its video before the camera is given back
 SWEEP_MAX_HOSTS = 1024  # do not unicast-sweep anything larger than a /22
 BOOT_GRACE = 15.0  # at startup, stop waiting for slow devices after this long and let them finish in the background
@@ -861,11 +862,24 @@ class Registry:
         failure.detail = exc.detail
         return failure
 
+    @contextlib.asynccontextmanager
+    async def camera(self, entry: Entry) -> AsyncIterator[None]:
+        """Hold a camera for one picture, clip or video. It serves one at a time, and one that stays busy for longer
+        than CAMERA_WAIT is reported as busy instead of keeping the caller waiting for minutes."""
+        try:
+            await asyncio.wait_for(entry.picture_lock.acquire(), CAMERA_WAIT)
+        except TimeoutError:
+            raise Busy(f"{entry.slug} is busy with another picture or video; try again when it is done") from None
+        try:
+            yield
+        finally:
+            entry.picture_lock.release()
+
     async def snapshot(self, entry: Entry, quality: str = "low") -> Picture:
         """One still picture from a camera the owner has enabled. Every error message is fit for an agent to read."""
         await self.check_picture(entry, quality)
         url, feed, secret = self._stream(entry, quality)
-        async with entry.picture_lock, self.grabs:
+        async with self.camera(entry), self.grabs:
             started = time.monotonic()
             try:
                 picture = await grab(url, feed=feed, ffmpeg=self.cfg.ffmpeg or "ffmpeg", secrets=(secret,))
@@ -892,38 +906,47 @@ class Registry:
         The privacy switch is read while the video starts, which saves a second, and no picture is handed out before
         the switch says the lens is open."""
         self._picture_rules(entry, quality)
+        # The live slot is taken right after the check, with nothing that waits in between, then the camera. From
+        # here on, whatever was taken is given back if anything fails or the viewer leaves, until the stream owns it.
         if self.lives.locked():
             raise Busy(f"{LIVE_STREAMS} cameras are already sending live video; close one first")
-        try:
-            await asyncio.wait_for(entry.picture_lock.acquire(), 3)
-        except TimeoutError:
-            raise Busy(f"{entry.slug} is already sending video") from None
         await self.lives.acquire()
-        battery = "battery_level" in entry.device.features
-        seconds = LIVE_BATTERY_SECONDS if battery else LIVE_SECONDS
-        url, feed, _ = self._stream(entry, quality)
-        frames = live_jpegs(url, feed=feed, quality=quality, seconds=seconds, ffmpeg=self.cfg.ffmpeg or "ffmpeg")
-
-        async def first_picture() -> bytes:
-            return await frames.__anext__()
-
+        held_camera = False
         started = time.monotonic()
-        starting = asyncio.create_task(first_picture())
+        starting: asyncio.Task | None = None
+        frames: AsyncIterator[bytes] | None = None
         try:
+            try:
+                await asyncio.wait_for(entry.picture_lock.acquire(), CAMERA_WAIT)
+            except TimeoutError:
+                raise Busy(f"{entry.slug} is already sending video") from None
+            held_camera = True
+            battery = "battery_level" in entry.device.features
+            seconds = LIVE_BATTERY_SECONDS if battery else LIVE_SECONDS
+            url, feed, _ = self._stream(entry, quality)
+            stream = frames = live_jpegs(url, feed=feed, quality=quality, seconds=seconds, ffmpeg=self.cfg.ffmpeg or "ffmpeg")
+
+            async def first_picture() -> bytes:
+                return await stream.__anext__()
+
+            starting = asyncio.create_task(first_picture())
             await self._lens_open(entry)
             first = await starting
         except BaseException as exc:
-            log.info("live video from %s did not start after %.1f s: %s", entry.slug, time.monotonic() - started, type(exc).__name__)
-            starting.cancel()
+            if held_camera:
+                log.info("live video from %s did not start after %.1f s: %s", entry.slug, time.monotonic() - started, type(exc).__name__)
             try:
-                # Close the camera's video, which may have started before the answer came. Bounded, and the camera
-                # is given back whatever happens here.
-                await asyncio.wait({starting}, timeout=STOP_GRACE)
-                if starting.done():
-                    await frames.aclose()
+                if starting is not None:
+                    starting.cancel()
+                    # Close the camera's video, which may have started before the answer came. Bounded, and the
+                    # camera is given back whatever happens here.
+                    await asyncio.wait({starting}, timeout=STOP_GRACE)
+                    if starting.done() and frames is not None:
+                        await frames.aclose()
             finally:
                 self.lives.release()
-                entry.picture_lock.release()
+                if held_camera:
+                    entry.picture_lock.release()
             if isinstance(exc, GrabError):
                 raise self.picture_failure(entry, exc) from None
             if isinstance(exc, StopAsyncIteration):

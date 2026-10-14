@@ -10,7 +10,7 @@ from pydantic import Field
 
 from .. import policy, views
 from ..policy import Tier
-from ..registry import DeviceUnavailable, Forbidden, RegistryError
+from ..registry import BadRequest, DeviceUnavailable, Forbidden, RegistryError
 
 KINDS = ["plug", "switch"]
 RuleKind = Literal["countdown", "schedule", "away"]
@@ -131,7 +131,7 @@ async def settings(registry, caller, device, section="status"):
     if section == "default_state":
         return await default_state(registry, caller, device)
     if section not in PLUG_READS:
-        raise ValueError("section must be status, default_state, auto_off, charge_guard, power_protection, "
+        raise BadRequest("section must be status, default_state, auto_off, charge_guard, power_protection, "
                          "max_power, runtime, led or price")
     method, fields = PLUG_READS[section]
     return await read(registry, caller, device, method, fields)
@@ -141,15 +141,15 @@ async def identity(registry, caller, device, name=None, icon=None):
     params = {}
     if name is not None:
         if not isinstance(name, str) or not name.strip() or len(name) > 64 or views.clean(name) != name:
-            raise ValueError("name must be 1 to 64 flat characters without surrounding whitespace")
+            raise BadRequest("name must be 1 to 64 flat characters without surrounding whitespace")
         params["nickname"] = base64.b64encode(name.encode()).decode("ascii")
     if icon is not None:
         if not isinstance(icon, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", icon):
-            raise ValueError("icon must be 1 to 64 letters, digits, underscores or hyphens")
+            raise BadRequest("icon must be 1 to 64 letters, digits, underscores or hyphens")
         # UNVERIFIED: avatar as a set_device_info key comes from the audit beans. The P115 fixture shows it in reads.
         params["avatar"] = icon
     if not params:
-        raise ValueError("supply a name or icon")
+        raise BadRequest("supply a name or icon")
     out = await write(registry, caller, device, "set_device_info", params)
     out["fields"] = [key for key, value in (("name", name), ("icon", icon)) if value is not None]
     return out
@@ -158,7 +158,7 @@ async def identity(registry, caller, device, name=None, icon=None):
 async def location(registry, caller, device, latitude, longitude):
     for value, limit, label in ((latitude, 90, "latitude"), (longitude, 180, "longitude")):
         if type(value) not in (int, float) or not math.isfinite(value) or not -limit <= value <= limit:
-            raise ValueError(f"{label} must be a finite number from {-limit} to {limit}")
+            raise BadRequest(f"{label} must be a finite number from {-limit} to {limit}")
     # UNVERIFIED: python-kasa reads latitude and longitude in ten-thousandths of a degree from device info.
     # That the write takes the same scale is an inference; no location write was captured.
     params = {"latitude": round(latitude * 10000), "longitude": round(longitude * 10000)}
@@ -169,7 +169,7 @@ async def location(registry, caller, device, latitude, longitude):
 
 async def hardware(registry, caller, device, section):
     if section not in HARDWARE_READS:
-        raise ValueError("unknown hardware section")
+        raise BadRequest("unknown hardware section")
     method, fields = HARDWARE_READS[section]
     return await read(registry, caller, device, method, fields, kinds=HARDWARE_KINDS)
 
@@ -192,7 +192,7 @@ async def calibration(registry, caller, device, minimum, maximum, curve=None):
     # Bounds are tool limits. No calibration test is started by this call.
     low, high = integer(minimum, 1, 100, "minimum"), integer(maximum, 1, 100, "maximum")
     if low > high:
-        raise ValueError("minimum must not exceed maximum")
+        raise BadRequest("minimum must not exceed maximum")
     params = {"min_threshold": low, "max_threshold": high}
     if curve is not None:
         params["curve_type"] = integer(curve, 0, 255, "curve_type")
@@ -212,15 +212,15 @@ async def low_power(registry, caller, device, enabled):
 
 async def led_set(registry, caller, device, mode, start=None, end=None):
     if mode not in ("always", "never", "night_mode"):
-        raise ValueError("LED mode must be always, never or night_mode")
+        raise BadRequest("LED mode must be always, never or night_mode")
     window = None
     if mode == "night_mode":
         first, last = minute(start), minute(end)
         if first == last:
-            raise ValueError("LED night window must be nonzero")
+            raise BadRequest("LED night window must be nonzero")
         window = {"night_mode_type": "time", "start_time": first, "end_time": last}
     elif start is not None or end is not None:
-        raise ValueError("start and end only apply to night_mode")
+        raise BadRequest("start and end only apply to night_mode")
     # Dimmers may be lights. Ordinary lights belong to the lights area.
     found = registry.resolve_one(device)
     kinds = HARDWARE_KINDS if found.device.device_type.name == "Dimmer" else KINDS
@@ -251,7 +251,7 @@ async def default_state(registry, caller, device):
 
 async def set_default_state(registry, caller, device, mode):
     if mode not in ("last_states", "always_on", "always_off", "toggle_states"):
-        raise ValueError("default must be last_states, always_on, always_off or toggle_states")
+        raise BadRequest("default must be last_states, always_on, always_off or toggle_states")
     entry = target(registry, device)
     info = response_object(entry, "get_device_info", await caller.call(entry, "get_device_info"))
     current = info.get("default_states")
@@ -260,13 +260,13 @@ async def set_default_state(registry, caller, device, mode):
     capabilities = current.get("re_power_type_capability")
     if capabilities:
         if mode not in capabilities:
-            raise ValueError("requested power-loss default is not supported by this socket")
+            raise BadRequest("requested power-loss default is not supported by this socket")
         # UNVERIFIED: smart_status plus re_power_type needs a v2 device fixture.
         payload = {"type": "smart_status", "re_power_type": mode}
     elif mode == "last_states":
         payload = {"type": "last_states"}
     elif mode == "toggle_states":
-        raise ValueError("toggle needs a reported re_power_type capability")
+        raise BadRequest("toggle needs a reported re_power_type capability")
     else:
         # Checked on a P115: the device accepts a custom state with "on" and reports always on this way.
         payload = {"type": "custom", "state": {"on": mode == "always_on"}}
@@ -277,16 +277,16 @@ async def set_default_state(registry, caller, device, mode):
 
 async def energy_history(registry, caller, device, series, start, end, interval, precision="wh"):
     if series not in ("energy", "power") or precision not in ("wh", "mwh"):
-        raise ValueError("series must be energy or power; precision must be wh or mwh")
+        raise BadRequest("series must be energy or power; precision must be wh or mwh")
     integer(start, 0, 253402300799, "start_timestamp")
     integer(end, 0, 253402300799, "end_timestamp")
     intervals = (60, 1440, 43200) if series == "energy" else (5, 60)
     if type(interval) is not int or interval not in intervals:
-        raise ValueError(f"{series} interval must be one of {intervals} minutes")
+        raise BadRequest(f"{series} interval must be one of {intervals} minutes")
     if end <= start or end - start > interval * 60 * 512:
-        raise ValueError("history range must be positive and contain at most 512 intervals")
+        raise BadRequest("history range must be positive and contain at most 512 intervals")
     if series == "power" and precision != "wh":
-        raise ValueError("power history does not have an energy precision option")
+        raise BadRequest("power history does not have an energy precision option")
     method = "get_power_data" if series == "power" else "get_energy_data_mwh" if precision == "mwh" else "get_energy_data"
     out = await read(registry, caller, device, method, HISTORY_FIELDS,
                      {"start_timestamp": start, "end_timestamp": end, "interval": interval})
@@ -335,49 +335,49 @@ def rule_list(entry, method, result):
 
 def integer(value, low, high, label):
     if type(value) is not int or not low <= value <= high:
-        raise ValueError(f"{label} must be an integer from {low} to {high}")
+        raise BadRequest(f"{label} must be an integer from {low} to {high}")
     return value
 
 
 def boolean(value, label="enabled"):
     if type(value) is not bool:
-        raise ValueError(f"{label} must be true or false")
+        raise BadRequest(f"{label} must be true or false")
     return value
 
 
 def rule_id(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
-        raise ValueError("rule id must contain 1 to 64 letters, digits, underscores or hyphens")
+        raise BadRequest("rule id must contain 1 to 64 letters, digits, underscores or hyphens")
     return value
 
 
 def minute(value):
     if not isinstance(value, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value):
-        raise ValueError("time must be HH:MM from 00:00 to 23:59")
+        raise BadRequest("time must be HH:MM from 00:00 to 23:59")
     hour, minutes = value.split(":")
     return int(hour) * 60 + int(minutes)
 
 
 def calendar(days, on_date):
     if not isinstance(days, list) or len(days) > 7 or len(set(days)) != len(days):
-        raise ValueError("days must be unique weekdays from 0 (Sunday) to 6 (Saturday)")
+        raise BadRequest("days must be unique weekdays from 0 (Sunday) to 6 (Saturday)")
     mask = sum(1 << integer(day, 0, 6, "weekday") for day in days)
     if bool(days) == bool(on_date):
-        raise ValueError("supply weekdays for a repeating rule or one YYYY-MM-DD date")
+        raise BadRequest("supply weekdays for a repeating rule or one YYYY-MM-DD date")
     # Checked on a P115 and an L430C: the device takes these words in lower case. Numbers and upper case get PARAMS_ERROR.
     out = {"week_day": mask, "mode": "repeat" if days else "once"}
     if on_date:
         if not isinstance(on_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", on_date):
-            raise ValueError("date must be YYYY-MM-DD")
+            raise BadRequest("date must be YYYY-MM-DD")
         try:
             when = date.fromisoformat(on_date)
         except ValueError:
-            raise ValueError("date must be a valid calendar date") from None
+            raise BadRequest("date must be a valid calendar date") from None
         # A one-off rule in the past may never run or run at once; far-future dates are not a real need.
         # One day of slack covers the gap between the host clock and the device's local time.
         today = date.today()
         if not today - timedelta(days=1) <= when <= today + timedelta(days=366):
-            raise ValueError("date must be from yesterday up to one year ahead")
+            raise BadRequest("date must be from yesterday up to one year ahead")
         out.update(year=when.year, month=when.month, day=when.day)
     return out
 
@@ -410,7 +410,7 @@ async def write(registry, caller, device, method, params=None, *, confirm=None, 
 
 def rule_name(kind):
     if kind not in RULE_NAMES:
-        raise ValueError("rule kind must be countdown, schedule or away")
+        raise BadRequest("rule kind must be countdown, schedule or away")
     return RULE_NAMES[kind]
 
 
@@ -447,7 +447,7 @@ async def schedule(registry, caller, device, at, on, days, on_date=None, enabled
 async def away(registry, caller, device, start, end, days, on_date=None, enabled=True, identifier=None):
     first, last = minute(start), minute(end)
     if first == last:
-        raise ValueError("Away Mode needs a nonzero window")
+        raise BadRequest("Away Mode needs a nonzero window")
     # UNVERIFIED: frequency=5 is a conservative candidate; the app's allowed range
     # and unit are not established. No frequency knob is exposed to an agent.
     payload = {**calendar(days, on_date), "start_min": first, "end_min": last,
@@ -468,7 +468,7 @@ async def enable_rule(registry, caller, device, kind, enabled, identifier=None):
     boolean(enabled)
     if identifier is None:
         if kind == "countdown":
-            raise ValueError("countdown enable needs a rule id")
+            raise BadRequest("countdown enable needs a rule id")
         # UNVERIFIED: set_*_all_enable with a single enable flag; the reply's top-level enable is this switch.
         return await write(registry, caller, device, f"set_{name}_all_enable", {"enable": enabled})
     rule_id(identifier)
