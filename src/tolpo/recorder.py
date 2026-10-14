@@ -16,19 +16,24 @@ a gap; the summary says so instead of guessing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
-from .registry import Registry, RegistryError
+from kasa.smartcam import SmartCamDevice
+
+from .calls import Caller
+from .registry import Entry, Registry, RegistryError
 
 GAP = 60.0  # no reading of a device for this long is written down as a gap
 ALIVE = 600.0  # how often a quiet recording says it is still running
 MAX_LINE = 4096
+READ_TIMEOUT = 15.0  # one reading of a hub; past this it counts as missed
 
 
 def _append(path: Path, record: dict[str, Any]) -> None:
@@ -42,25 +47,87 @@ def contact_sensors(registry: Registry) -> list[str]:
     return sorted(e.slug for e in registry.entries() if "is_open" in e.device.features)
 
 
+async def _children(caller: Caller, hub: Entry) -> dict[str, dict[str, Any]]:
+    """The hub's own list of its devices, page by page, keyed by device id."""
+    camera_style = isinstance(hub.device, SmartCamDevice)
+    method = "getChildDeviceList" if camera_style else "get_child_device_list"
+    found: dict[str, dict[str, Any]] = {}
+    start = 0
+    for _ in range(20):
+        page = await caller.call(hub, method, {"childControl": {"start_index": start}} if camera_style else {"start_index": start})
+        kids = page.get("child_device_list") if isinstance(page, dict) else None
+        if not isinstance(kids, list):
+            raise RegistryError(f"{hub.slug} returned an invalid list of its devices")
+        for kid in kids:
+            if isinstance(kid, dict) and isinstance(kid.get("device_id"), str):
+                found[kid["device_id"]] = kid
+        start += len(kids)
+        total = page.get("sum")
+        if not kids or type(total) is not int or start >= total:
+            break
+    return found
+
+
+def light_reader(registry: Registry) -> Callable[[list[Entry]], Awaitable[dict[str, bool | None]]]:
+    """Read whether each sensor is open with one list request per hub. A full update of a hub and all its sensors
+    every few seconds, next to another program that also updated it, made an H200 time out for both."""
+    caller = Caller(registry)
+
+    async def read(entries: list[Entry]) -> dict[str, bool | None]:
+        states: dict[str, bool | None] = {}
+        hubs: dict[int, tuple[Entry, list[Entry]]] = {}
+        for entry in entries:
+            if entry.root is None:
+                await registry.refresh(entry, force=True)
+                value = registry.feature_value(entry.device.features["is_open"]) if entry.online else None
+                states[entry.slug] = value if isinstance(value, bool) else None
+            else:
+                hubs.setdefault(id(entry.root), (entry.root, []))[1].append(entry)
+        for hub, sensors in hubs.values():
+            try:
+                listing = await asyncio.wait_for(_children(caller, hub), READ_TIMEOUT)
+            except Exception:
+                listing = {}  # a missed reading; a long run of them becomes a gap
+            for entry in sensors:
+                info = listing.get(entry.device.device_id) or {}
+                value = info.get("open")
+                states[entry.slug] = value if isinstance(value, bool) and info.get("status", "online") == "online" else None
+        return states
+
+    return read
+
+
 async def record(registry: Registry, devices: list[str], path: str, *, every: float = 5.0,
-                 stop: asyncio.Event | None = None, clock: Callable[[], float] = time.time) -> None:
-    """Read the sensors every `every` seconds until `stop` is set, and append what changed to `path`."""
+                 stop: asyncio.Event | None = None, clock: Callable[[], float] = time.time,
+                 read: Callable[[list[Entry]], Awaitable[dict[str, bool | None]]] | None = None) -> None:
+    """Read the sensors every `every` seconds until `stop` is set, and append what changed to `path`. A stop does
+    not wait for a reading that is still under way, so the stop line is always written."""
     entries = [registry.resolve_one(name) for name in devices]
     for entry in entries:
         if "is_open" not in entry.device.features:
             raise RegistryError(f"{entry.slug} is not a door or window sensor")
     file = Path(path).expanduser()
     stop = stop or asyncio.Event()
+    read = read or light_reader(registry)
     state: dict[str, bool] = {}
     seen: dict[str, float] = {}
     _append(file, {"t": int(clock()), "event": "start", "devices": [e.slug for e in entries], "every": every})
     alive = clock()
     try:
         while not stop.is_set():
-            await registry.refresh_all(entries, force=True)
+            reading = asyncio.ensure_future(read(entries))
+            stopping = asyncio.ensure_future(stop.wait())
+            await asyncio.wait({reading, stopping}, return_when=asyncio.FIRST_COMPLETED)
+            stopping.cancel()
+            if not reading.done():
+                reading.cancel()
+                with contextlib.suppress(BaseException):
+                    await reading
+                break
+            states = reading.result()
             now = clock()
             for entry in entries:
-                value = registry.feature_value(entry.device.features["is_open"]) if entry.online else None
+                value = states.get(entry.slug)
                 if not isinstance(value, bool):
                     continue
                 if entry.slug in seen and now - seen[entry.slug] > GAP:

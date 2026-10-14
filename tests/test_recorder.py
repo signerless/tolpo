@@ -27,17 +27,17 @@ def house(tmp_path, **settings):
 
 async def run(reg, devices, script, path, every=5):
     """Each reading of the recorder takes the next (time, open) from `script`; it stops when the script ends."""
-    door = reg.resolve_one("main-door").device.features["is_open"]
     stop, now, steps = asyncio.Event(), [script[0][0]], iter(script)
 
-    async def reading(entries, force=False):
+    async def read(entries):
         try:
-            now[0], door.value = next(steps)
+            now[0], value = next(steps)
         except StopIteration:
             stop.set()
+            return {}
+        return {entry.slug: value for entry in entries}
 
-    reg.refresh_all = reading
-    await recorder.record(reg, devices, path, every=0.001, stop=stop, clock=lambda: now[0])
+    await recorder.record(reg, devices, path, every=0.001, stop=stop, clock=lambda: now[0], read=read)
 
 
 def lines(path):
@@ -128,7 +128,39 @@ async def test_an_agent_reads_the_history_over_mcp(tmp_path):
         nothing = (await client.call_tool("recorded_history", {"device": "main door"})).structured_content
         assert nothing["recorded"] is False and "tolpo record main-door" in nothing["how"]
         await run(reg, ["main door"], [(2_000_000_000, False), (2_000_000_005, True), (2_000_000_065, False)], str(path))
-        reg.refresh_all = None
         # the recording above is in the future of this test's clock: read it back with a window that holds it
         out = (await client.call_tool("recorded_history", {"device": "main-door", "days": 366})).structured_content
     assert out["recorded"] is True and out["device"] == "main-door" and out["times_within_seconds"] == 0.001
+
+
+@pytest.mark.anyio
+async def test_a_stop_does_not_wait_for_a_slow_reading(tmp_path):
+    reg, _ = house(tmp_path)
+    path = tmp_path / "h" / "history.jsonl"
+    stop = asyncio.Event()
+
+    async def stuck(entries):
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(recorder.record(reg, ["main-door"], str(path), stop=stop, read=stuck))
+    await asyncio.sleep(0.05)
+    stop.set()
+    await asyncio.wait_for(task, 2)
+    assert [line.get("event") for line in lines(path)] == ["start", "stop"]
+
+
+@pytest.mark.anyio
+async def test_one_list_request_per_hub_gives_every_sensor(tmp_path):
+    reg, devices = house(tmp_path)
+    door = reg.resolve_one("main-door")
+    asked = []
+
+    async def query(request):
+        asked.append(request)
+        (method, params), = request.items()
+        return {method: {"start_index": 0, "sum": 1, "child_device_list": [{"device_id": door.device.device_id, "open": True, "status": "online"}]}}
+
+    devices["hub"].protocol = type("P", (), {"query": staticmethod(query)})()
+    states = await recorder.light_reader(reg)([door])
+    assert states == {"main-door": True}
+    assert asked == [{"get_child_device_list": {"start_index": 0}}]  # one light request, no full update
