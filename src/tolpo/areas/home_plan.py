@@ -14,6 +14,7 @@ from pydantic import Field
 from .. import home
 from ..policy import Tier
 from ..registry import Forbidden, RegistryError
+from ..views import clean
 
 METHODS = []  # no device method: the plan is tolpo's own file
 
@@ -157,7 +158,7 @@ def spots_for(plan, room_id):
 
 def waiting_names(registry) -> list[str]:
     """Names of known devices that are still connecting. Names only: addresses are not for the agent."""
-    return sorted(str(d.get("name") or "") for d in registry.not_connected())
+    return sorted(clean(str(d.get("name") or "")) for d in registry.not_connected())
 
 
 def view_url(cfg) -> str:

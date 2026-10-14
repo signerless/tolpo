@@ -435,3 +435,14 @@ async def test_frames_from_an_ffmpeg_that_fails_after_printing_a_picture_are_a_f
     with pytest.raises(snapshot.GrabError) as caught:
         await snapshot.grab_frames("rtsp://cam:pw@192.0.2.10:554/stream2", count=1, seconds=1, ffmpeg=ffmpeg.path)
     assert caught.value.reason == "failed" and "Invalid data" in caught.value.detail
+
+
+def test_a_short_video_table_is_ignored_instead_of_crashing():
+    from tolpo.tsvideo import TsVideo
+
+    video = TsVideo()
+    video._pmt_pids.add(0x100)
+    # a packet for the program table whose table claims 3 bytes: too short to hold its own header
+    packet = bytes([0x47, 0x41, 0x00, 0x10, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00]) + b"\xff" * 177
+    video.feed(packet)
+    assert video.format is None

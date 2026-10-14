@@ -454,6 +454,21 @@ def cli_config(fake, **overrides):
 
 
 @pytest.mark.anyio
+async def test_the_command_never_writes_through_a_symlink_and_tightens_an_old_file(ffmpeg, monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "Registry", Offline)
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("keep me")
+    (tmp_path / "planted.jpg").symlink_to(target)
+    assert await cli._snapshot(cli_config(ffmpeg), "hallway-cam", str(tmp_path / "planted.jpg"), "low") == 1
+    assert target.read_text() == "keep me"
+    old = tmp_path / "old.jpg"
+    old.write_bytes(b"old")
+    old.chmod(0o644)
+    assert await cli._snapshot(cli_config(ffmpeg), "hallway-cam", str(old), "low") == 0
+    assert stat.S_IMODE(os.stat(old).st_mode) == 0o600 and old.read_bytes() == fakes.TINY_JPEG
+
+
+@pytest.mark.anyio
 async def test_the_command_saves_a_file_only_its_owner_can_read(ffmpeg, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "Registry", Offline)
     out = tmp_path / "front.jpg"

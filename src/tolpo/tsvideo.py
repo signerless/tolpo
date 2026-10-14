@@ -81,7 +81,8 @@ class TsVideo:
 
     def _pmt(self, payload: bytes) -> None:
         section = self._section(payload)
-        if section is None or section[0] != 0x02 or self._video_pid is not None:
+        # A table too short to hold its own header is ignored rather than read past its end.
+        if section is None or len(section) < 16 or section[0] != 0x02 or self._video_pid is not None:
             return
         end = len(section) - 4
         pos = 12 + ((section[10] & 0x0F) << 8 | section[11])

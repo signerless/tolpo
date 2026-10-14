@@ -79,7 +79,14 @@ async def _snapshot(cfg: Config, ref: str, output: str, quality: str) -> int:
         return _complain(exc)
     finally:
         await registry.stop()
-    fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Never through a symlink someone planted, and only the owner may read it, also when the file was there before.
+    try:
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        print(f"{output}: cannot write it ({exc.strerror})", file=sys.stderr)
+        return 1
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)
     with os.fdopen(fd, "wb") as out:
         out.write(picture.data)
     print(f"{output}: {picture.width}x{picture.height}, {len(picture.data) // 1024} KB")

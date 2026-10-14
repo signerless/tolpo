@@ -38,7 +38,7 @@ READ_TIMEOUT = 15.0  # one reading of a hub; past this it counts as missed
 
 def _append(path: Path, record: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "a") as out:
         out.write(json.dumps(record, separators=(",", ":")) + "\n")
 

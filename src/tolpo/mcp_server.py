@@ -91,7 +91,9 @@ def _translated():
 
 
 def _feature_row(f: FeatureOut) -> dict[str, Any]:
-    row: dict[str, Any] = {"id": f.id, "type": f.type, "value": f.value}
+    # A text value comes from the device and may hold whatever someone typed into it: keep it flat and short.
+    value = clean(f.value, 256) if isinstance(f.value, str) else f.value
+    row: dict[str, Any] = {"id": f.id, "type": f.type, "value": value}
     if f.unit:
         row["unit"] = f.unit
     if f.writable:
